@@ -37,7 +37,7 @@
 #include "web.h"
 #include "icon_data.h"
 
-#define VERSION "PS4 Mount 0.1.0"
+#define VERSION "PS4 Mount 0.2.0"
 #define LOCK_PORT 9032
 #define SCAN_SECONDS 10
 #define STATE_DIR "/data/ps4mount"
@@ -187,10 +187,11 @@ static int src_open(title_src_t *t, const char *root, const char *tid) {
             if (t->patch.fd > 0)
                 pkg_close(&t->patch);
         } else {
-            /* An update only fits the title and the game build (master VERSION) it was made for. */
+            /* An update only fits the title it was made for. (Master VERSION may differ:
+             * installed games run with base 01.02 + update 01.00.) */
             const sfo_item_t *uv = sfo_get(&t->patch_sfo, "VERSION");
             const char *gver = gv ? gv->sval : "?", *uver = uv ? uv->sval : "?";
-            if (strcmp(t->patch.title_id, tid) || strcmp(gver, uver)) {
+            if (strcmp(t->patch.title_id, tid)) {
                 snprintf(t->update_issue, sizeof(t->update_issue),
                          "Update ignored: it is for %s version %s, the game is %s version %s", t->patch.title_id, uver,
                          tid, gver);
@@ -539,6 +540,31 @@ static int title_state(title_src_t *t) {
 
 static void pump_events(int ms);
 
+/* The launch check compares /system_data/priv/appmeta/<TID>/param.sfo with the
+ * update's param.sfo byte for byte; AppInstallAll writes the game's one there. */
+static void enforce_patch_sfo(title_src_t *t) {
+    if (!t->has_patch)
+        return;
+    size_t len;
+    uint8_t *sfo = pkg_entry(&t->patch, 0x1000, &len);
+    if (!sfo)
+        return;
+    char path[96];
+    snprintf(path, sizeof(path), "/system_data/priv/appmeta/%s/param.sfo", t->app.title_id);
+    int fd = open(path, O_RDONLY), same = 0;
+    if (fd >= 0) {
+        uint8_t *cur = malloc(len + 1);
+        same = cur && read(fd, cur, len + 1) == (ssize_t)len && !memcmp(cur, sfo, len);
+        free(cur);
+        close(fd);
+    }
+    if (!same) {
+        printf("[reg] %s: priv param.sfo was not the update's, rewritten\n", t->app.title_id);
+        write_file(path, sfo, len, 0777);
+    }
+    free(sfo);
+}
+
 static int register_title(title_src_t *t) {
     const char *tid = t->app.title_id;
     if (place_files(t) || mount_title(t, 1))
@@ -565,6 +591,7 @@ static int register_title(title_src_t *t) {
         if (db_register(&d))
             return -1;
     }
+    enforce_patch_sfo(t);
     char marker[64];
     snprintf(marker, sizeof(marker), STATE_DIR "/%s.src", tid);
     if (write_file(marker, t->marker, strlen(t->marker), 0666))
@@ -712,6 +739,7 @@ static void scan_root(const char *root, int fresh, int reconnected) {
         if (src_open(&src, root, t->tid))
             continue;
         if (t->state == 0) {
+            enforce_patch_sfo(&src);
             manage(&src);
             managed_t *m = managed_by(t->tid, NULL);
             if (mount_title(&src, m ? m->rw : 0))
