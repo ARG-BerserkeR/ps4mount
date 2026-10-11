@@ -37,7 +37,7 @@
 #include "web.h"
 #include "icon_data.h"
 
-#define VERSION "PS4 Mount 0.5"
+#define VERSION "PS4 Mount 0.1.0"
 #define LOCK_PORT 9032
 #define SCAN_SECONDS 10
 #define STATE_DIR "/data/ps4mount"
@@ -608,8 +608,13 @@ static void adopt_root_pkgs(const char *root) {
             cat = sfo_get(&sfo, "CATEGORY");
         int is_app = cat && !strcmp(cat->sval, "gd"), is_patch = cat && !strcmp(cat->sval, "gp");
         int ok = (is_app || is_patch) && !strncmp(pkg.title_id, "CUSA", 4) && pkg_fake_key(&pkg);
-        char tid[10];
+        char tid[10], ver[16] = "";
+        uint8_t digest[32];
         snprintf(tid, sizeof(tid), "%s", pkg.title_id);
+        memcpy(digest, pkg.digest, sizeof(digest));
+        const sfo_item_t *av = ok ? sfo_get(&sfo, "APP_VER") : NULL;
+        if (av && !av->is_int)
+            snprintf(ver, sizeof(ver), "%s", av->sval);
         pkg_close(&pkg);
         if (!ok) {
             if (first_time(path))
@@ -625,9 +630,28 @@ static void adopt_root_pkgs(const char *root) {
         mkdirs(dst, 0777);
         snprintf(dst, sizeof(dst), "%s/ps4/%s/%s", root, tid, is_app ? "app.pkg" : "patch.pkg");
         if (exists(dst)) {
-            if (first_time(path))
-                printf("[scan] %s already exists, %s left in place\n", dst, e->d_name);
-            continue;
+            pkg_t cur;
+            int same = !pkg_open(&cur, dst) && !memcmp(cur.digest, digest, sizeof(digest));
+            if (cur.fd > 0)
+                pkg_close(&cur);
+            if (same || is_app) {
+                /* duplicates, and a second copy of a game, stay where they are */
+                if (first_time(path))
+                    notify(same ? "%s is already in use for %s; the copy was left in the USB root"
+                                : "%s: %s already has a game package; the new one was left in the USB root",
+                           e->d_name, tid);
+                continue;
+            }
+            /* a different update: it replaces the current one, which is kept aside */
+            char old[PATH_MAX];
+            snprintf(old, sizeof(old), "%s/ps4/%s/replaced", root, tid);
+            mkdirs(old, 0777);
+            snprintf(old, sizeof(old), "%s/ps4/%s/replaced/patch-%ld.pkg", root, tid, (long)time(NULL));
+            if (rename(dst, old)) {
+                printf("[scan] keep %s aside: %s\n", dst, strerror(errno));
+                continue;
+            }
+            notify("New update for %s (v%s): the previous one was moved to ps4/%s/replaced", tid, ver, tid);
         }
         if (rename(path, dst))
             printf("[scan] move %s: %s\n", path, strerror(errno));
