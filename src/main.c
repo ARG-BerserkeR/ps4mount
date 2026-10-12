@@ -753,6 +753,52 @@ static int has_candidates(const char *root) {
     return found;
 }
 
+/* Titles that failed to be added wait before the next try, and the failure is
+ * notified once: when the system refuses registrations, every scan would retry. */
+#define RETRY_SECONDS 300
+
+typedef struct {
+    char tid[10];
+    time_t until;
+} retry_t;
+
+static retry_t g_retry[MAX_TITLES];
+
+static retry_t *retry_entry(const char *tid, int create) {
+    retry_t *free_slot = NULL;
+    for (int i = 0; i < MAX_TITLES; i++) {
+        if (!strcmp(g_retry[i].tid, tid))
+            return &g_retry[i];
+        if (!free_slot && !g_retry[i].tid[0])
+            free_slot = &g_retry[i];
+    }
+    if (create && free_slot)
+        snprintf(free_slot->tid, sizeof(free_slot->tid), "%s", tid);
+    return create ? free_slot : NULL;
+}
+
+static int retry_waiting(const char *tid) {
+    retry_t *r = retry_entry(tid, 0);
+    return r && time(NULL) < r->until;
+}
+
+/* Returns 1 the first time a title fails (to notify it), 0 for repeated failures. */
+static int retry_failed(const char *tid) {
+    retry_t *r = retry_entry(tid, 1);
+    if (!r)
+        return 1;
+    int first = !r->until;
+    r->until = time(NULL) + RETRY_SECONDS;
+    printf("[reg] %s: next try in %d seconds\n", tid, RETRY_SECONDS);
+    return first;
+}
+
+static void retry_clear(const char *tid) {
+    retry_t *r = retry_entry(tid, 0);
+    if (r)
+        memset(r, 0, sizeof(*r));
+}
+
 static void scan_root(const char *root, int fresh, int reconnected) {
     const char *label = root + 5; /* "usb0" / "ext0" */
     if (!has_candidates(root)) {
@@ -794,6 +840,8 @@ static void scan_root(const char *root, int fresh, int reconnected) {
         title_t *t = &titles[count++];
         snprintf(t->tid, sizeof(t->tid), "%s", e->d_name);
         t->state = title_state(&src);
+        if (t->state == 1 && retry_waiting(t->tid))
+            t->state = -1; /* failed recently: tried again later */
         pending += t->state == 1;
         src_close(&src);
     }
@@ -828,8 +876,10 @@ static void scan_root(const char *root, int fresh, int reconnected) {
             notify("Adding %d/%d: %s%s (%s)", ++done, pending, src.name,
                    src.has_patch ? " with update" : "", t->tid);
             if (register_title(&src)) {
-                notify("Failed to add %s (%s)", src.name, t->tid);
+                if (retry_failed(t->tid))
+                    notify("Failed to add %s (%s), it is tried again every few minutes", src.name, t->tid);
             } else {
+                retry_clear(t->tid);
                 ok++;
                 notify("%s ready to play", src.name);
             }
