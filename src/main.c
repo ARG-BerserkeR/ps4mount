@@ -51,7 +51,16 @@
 #define HOLD_DIR "/system_data/ps4mount"
 #define MAX_TITLES 256
 #define MAX_DLC 64
+#define BATCH_QUIET 10 /* seconds without writes to the system databases between groups */
 #define MAX_DLC_TIDS 8
+
+/* Settings (defaults below). */
+typedef struct {
+    int batch;      /* new games are added in groups */
+    int batch_size; /* games per group */
+} config_t;
+
+static config_t g_cfg = {1, 5};
 
 typedef struct { char useless[45]; char message[3075]; } notify_request_t;
 int sceUserServiceInitialize(void *);
@@ -229,8 +238,10 @@ static void dlc_open(title_src_t *t) {
                 continue;
             }
             const sfo_item_t *cat = sfo_get(&a->sfo, "CATEGORY");
+            /* the fake key was checked when the pkg was moved here; checking it again on
+             * every scan would cost an RSA operation per add-on */
             if (!cat || strcmp(cat->sval, "ac") || strcmp(a->pkg.title_id, e->d_name) ||
-                strcmp(a->pkg.content_id + 20, f->d_name) || !pkg_fake_key(&a->pkg)) {
+                strcmp(a->pkg.content_id + 20, f->d_name)) {
                 pkg_close(&a->pkg);
                 continue;
             }
@@ -649,21 +660,46 @@ static int nullfs_mount(const char *dir, const char *target) {
 
 /* A running PS4 title keeps /mnt/sandbox/pfsmnt/<TID>-app0 mounted. Unlike the klog
  * events this survives a restart of the daemon, so it is the reference for "running". */
-static int title_running(const char *tid) {
-    char want[64];
-    snprintf(want, sizeof(want), "/mnt/sandbox/pfsmnt/%s-app0", tid);
+/* Sandbox mounts of running titles, read from the mount table at most once a second
+ * (the table holds over a thousand entries; reading it per title would be wasteful). */
+static char (*g_sandboxes)[10];
+static int g_nsandboxes;
+static time_t g_sandboxes_at;
+
+static void refresh_sandboxes(void) {
+    if (g_sandboxes && time(NULL) == g_sandboxes_at)
+        return;
+    g_sandboxes_at = time(NULL);
+    g_nsandboxes = 0;
     int n = getfsstat(NULL, 0, MNT_NOWAIT);
     if (n <= 0)
-        return 0;
+        return;
     struct statfs *list = malloc(sizeof(*list) * (size_t)(n + 16));
-    if (!list)
-        return 0;
+    char (*ids)[10] = realloc(g_sandboxes, sizeof(*ids) * (size_t)(n + 16));
+    if (ids)
+        g_sandboxes = ids;
+    if (!list || !ids) {
+        free(list);
+        return;
+    }
     n = getfsstat(list, (long)(sizeof(*list) * (size_t)(n + 16)), MNT_NOWAIT);
-    int found = 0;
-    for (int i = 0; i < n && !found; i++)
-        found = !strcmp(list[i].f_mntonname, want);
+    static const char prefix[] = "/mnt/sandbox/pfsmnt/";
+    for (int i = 0; i < n; i++) {
+        const char *on = list[i].f_mntonname;
+        if (strlen(on) != sizeof(prefix) - 1 + 9 + 5 || strncmp(on, prefix, sizeof(prefix) - 1) ||
+            strcmp(on + sizeof(prefix) - 1 + 9, "-app0"))
+            continue;
+        snprintf(g_sandboxes[g_nsandboxes++], 10, "%.9s", on + sizeof(prefix) - 1);
+    }
     free(list);
-    return found;
+}
+
+static int title_running(const char *tid) {
+    refresh_sandboxes();
+    for (int i = 0; i < g_nsandboxes; i++)
+        if (!strcmp(g_sandboxes[i], tid))
+            return 1;
+    return 0;
 }
 
 static int mount_dir(const char *dir, const char *target) {
@@ -895,27 +931,74 @@ static int install_all_start(void) {
     return 0;
 }
 
-static int register_title(title_src_t *t) {
-    const char *tid = t->app.title_id;
+/* Registration runs in three steps so a group of games costs the system one
+ * AppInstallAll and no write to its databases while it is still busy:
+ *   1. register_prepare: files and mounts of each game of the group;
+ *   2. one sceAppInstUtilAppInstallAll, then wait until ShellCore has the rows;
+ *   3. register_finish: checks the title is registered, writes the marker. */
+static int register_prepare(title_src_t *t) {
     if (place_files(t) || mount_title(t))
         return -1;
     manage(t);
-    /* New title: let ShellCore register everything under /user/app itself.
-     * That path also refreshes the home screen and fetches the PSN concept. */
-    if (!db_is_registered(tid)) {
-        install_all_start();
-        /* the icon shows up before the rows land: keep serving klog/panel meanwhile */
-        for (int i = 0; i < 30 && !db_is_registered(tid); i++)
-            pump_events(1000);
-        printf("[reg] %s: AppInstallAll=%s0x%08x registered=%d\n", tid, g_install_busy ? "(still running) " : "",
-               g_install_rc, db_is_registered(tid));
+    return 0;
+}
+
+/* Max mtime of the system databases (and their journals): ShellCore is busy while it changes. */
+static time_t db_mtime(void) {
+    static const char *files[] = {"/system_data/priv/mms/app.db", "/system_data/priv/mms/app.db-journal",
+                                  "/system_data/priv/mms/appinfo.db", "/system_data/priv/mms/appinfo.db-journal",
+                                  "/system_data/priv/mms/addcont.db", NULL};
+    time_t t = 0;
+    struct stat st;
+    for (int i = 0; files[i]; i++)
+        if (!stat(files[i], &st) && st.st_mtime > t)
+            t = st.st_mtime;
+    return t;
+}
+
+/* Waits until the system databases were not written for quiet seconds (max limit). */
+static void wait_db_quiet(int quiet, int limit) {
+    time_t start = time(NULL), last = db_mtime(), changed = time(NULL);
+    while (time(NULL) - changed < quiet && time(NULL) - start < limit) {
+        pump_events(1000);
+        time_t m = db_mtime();
+        if (m != last) {
+            last = m;
+            changed = time(NULL);
+        }
     }
-    /* The system databases are only ever written by the system: ShellCore keeps them
-     * open with its own cache, and rows written from outside make it flag app.db as
-     * corrupted (and rebuild it at the next boot). A title the system did not
-     * register is tried again on the next scan. */
+}
+
+/* ShellCore registers every new title under /user/app itself; this also refreshes the
+ * home screen and fetches the PSN concept. Waits while titles keep arriving. */
+static void install_all(char (*tids)[10], int n) {
+    int need = 0;
+    for (int i = 0; i < n; i++)
+        need += !db_is_registered(tids[i]);
+    if (!need)
+        return;
+    install_all_start();
+    int done = n - need, idle = 0;
+    while (done < n && idle < 30) {
+        pump_events(1000);
+        int now = 0;
+        for (int i = 0; i < n; i++)
+            now += db_is_registered(tids[i]);
+        idle = now > done ? 0 : idle + 1;
+        done = now;
+    }
+    printf("[reg] AppInstallAll=%s0x%08x: %d of %d title(s) registered\n", g_install_busy ? "(still running) " : "",
+           g_install_rc, done, n);
+}
+
+/* The system databases are only ever written by the system: ShellCore keeps them
+ * open with its own cache, and rows written from outside make it flag app.db as
+ * corrupted (and rebuild it at the next boot). A title the system did not register
+ * is tried again later. */
+static int register_finish(title_src_t *t) {
+    const char *tid = t->app.title_id;
     if (!db_is_registered(tid)) {
-        printf("[reg] %s: not registered by the system yet, retried on the next scan\n", tid);
+        printf("[reg] %s: not registered by the system\n", tid);
         return -1;
     }
     enforce_patch_sfo(t);
@@ -927,17 +1010,27 @@ static int register_title(title_src_t *t) {
     return 0;
 }
 
-/* Logs a skipped root file once per daemon run. */
+/* Logs a skipped root file once per daemon run (any number of files). */
 static int first_time(const char *path) {
-    static char seen[64][PATH_MAX];
-    static int n;
-    for (int i = 0; i < n; i++)
+    static char **seen;
+    static size_t n, cap;
+    for (size_t i = 0; i < n; i++)
         if (!strcmp(seen[i], path))
             return 0;
-    if (n < 64)
-        snprintf(seen[n++], PATH_MAX, "%s", path);
+    if (n == cap) {
+        size_t ncap = cap ? cap * 2 : 64;
+        char **grown = realloc(seen, ncap * sizeof(*seen));
+        if (!grown)
+            return 1;
+        seen = grown;
+        cap = ncap;
+    }
+    seen[n] = strdup(path);
+    if (seen[n])
+        n++;
     return 1;
 }
+
 
 /* 1 when sfo lists the add-on prefix (UP0000-CUSA00000_00) as one of its add-on services. */
 static int sfo_serves(const sfo_t *sfo, const char *prefix) {
@@ -1105,8 +1198,8 @@ static int adopt_root_pkgs(const char *root) {
 }
 
 typedef struct {
-    char tid[10];
-    int state;
+    char tid[10], name[128];
+    int state, ndlc, has_patch;
 } title_t;
 
 /* A ps4/ folder or a .pkg in the root. Other partitions (like the boot partition
@@ -1233,6 +1326,9 @@ static void scan_root(const char *root, int fresh, int reconnected) {
         }
         title_t *t = &titles[count++];
         snprintf(t->tid, sizeof(t->tid), "%s", e->d_name);
+        snprintf(t->name, sizeof(t->name), "%s", src.name);
+        t->ndlc = src.ndlc;
+        t->has_patch = src.has_patch;
         t->state = title_state(&src);
         if (t->state == 1 && retry_waiting(t->tid))
             t->state = -1; /* failed recently: tried again later */
@@ -1246,45 +1342,108 @@ static void scan_root(const char *root, int fresh, int reconnected) {
         notify("%s: %d PS4 game(s) found, %d new or updated", label, count, pending);
     else if (pending)
         notify("%s: %d new or updated PS4 game(s)", label, pending);
-    int done = 0, ok = 0;
+    /* games already in the library: keep them mounted */
     for (int i = 0; i < count; i++) {
         title_t *t = &titles[i];
-        if (t->state < 0)
-            continue;
         title_src_t src;
-        if (src_open(&src, root, t->tid))
+        if (t->state != 0 || src_open(&src, root, t->tid))
             continue;
-        if (t->state == 0) {
-            enforce_patch_sfo(&src);
-            manage(&src);
-            managed_t *m = managed_by(t->tid, NULL);
-            int running = title_running(t->tid);
-            if (m && running && !m->running) {
-                m->running = 1; /* open before this daemon started (restart or crash) */
-            } else if (m && !running && m->running && time(NULL) - m->running_since > 60) {
-                m->running = 0; /* closed without a klog end event */
+        enforce_patch_sfo(&src);
+        manage(&src);
+        managed_t *m = managed_by(t->tid, NULL);
+        int running = title_running(t->tid);
+        if (m && running && !m->running) {
+            m->running = 1; /* open before this daemon started (restart or crash) */
+        } else if (m && !running && m->running && time(NULL) - m->running_since > 60) {
+            m->running = 0; /* closed without a klog end event */
+        }
+        if (mount_title(&src))
+            notify("Failed to mount %s (%s)", src.name, t->tid);
+        src_close(&src);
+    }
+    if (!pending)
+        return;
+
+    /* New or changed games, in groups: one AppInstallAll per group and a quiet
+     * period between groups, so the system is never flooded with registrations. */
+    int size = g_cfg.batch && g_cfg.batch_size > 0 ? g_cfg.batch_size : pending;
+    int groups = (pending + size - 1) / size, grouped = groups > 1, done = 0, ok = 0, group = 0;
+    if (grouped)
+        notify("%s: adding %d PS4 games in %d groups of up to %d", label, pending, groups, size);
+    int *members = malloc(sizeof(int) * (size_t)size);
+    char (*ids)[10] = malloc(10 * (size_t)size);
+    int *prepared = malloc(sizeof(int) * (size_t)size);
+    if (!members || !ids || !prepared) {
+        free(members);
+        free(ids);
+        free(prepared);
+        return;
+    }
+    for (int i = 0; i < count;) {
+        int n = 0;
+        for (; i < count && n < size; i++)
+            if (titles[i].state == 1)
+                members[n++] = i;
+        if (!n)
+            break;
+        if (group++)
+            wait_db_quiet(BATCH_QUIET, 120);
+        if (grouped) {
+            buf_t names = {0};
+            for (int k = 0; k < n; k++)
+                buf_printf(&names, "%s%s", k ? ", " : "", titles[members[k]].name);
+            notify("Group %d/%d, adding %d-%d of %d: %.400s", group, groups, done + 1, done + n, pending,
+                   names.data ? (const char *)names.data : "");
+            buf_free(&names);
+        }
+        int np = 0;
+        for (int k = 0; k < n; k++) {
+            title_t *t = &titles[members[k]];
+            title_src_t src;
+            prepared[k] = 0;
+            if (!grouped) {
+                char extra[64] = "";
+                if (t->ndlc)
+                    snprintf(extra, sizeof(extra), " + %d add-on%s", t->ndlc, t->ndlc > 1 ? "s" : "");
+                notify("Adding %d/%d: %s%s%s (%s)", done + k + 1, pending, t->name,
+                       t->has_patch ? " with update" : "", extra, t->tid);
             }
-            if (mount_title(&src))
-                notify("Failed to mount %s (%s)", src.name, t->tid);
-        } else {
-            char extra[64] = "";
-            if (src.ndlc)
-                snprintf(extra, sizeof(extra), " + %d add-on%s", src.ndlc, src.ndlc > 1 ? "s" : "");
-            notify("Adding %d/%d: %s%s%s (%s)", ++done, pending, src.name, src.has_patch ? " with update" : "",
-                   extra, t->tid);
-            if (register_title(&src)) {
+            if (src_open(&src, root, t->tid) || register_prepare(&src)) {
                 if (retry_failed(t->tid))
-                    notify("Failed to add %s (%s), it is tried again every few minutes", src.name, t->tid);
+                    notify("Failed to add %s (%s), it is tried again every few minutes", t->name, t->tid);
+            } else {
+                prepared[k] = 1;
+                snprintf(ids[np++], 10, "%s", t->tid);
+            }
+            if (src.app.fd > 0)
+                src_close(&src);
+        }
+        install_all(ids, np);
+        /* own rows only after ShellCore stopped writing to its databases */
+        wait_db_quiet(3, 30);
+        for (int k = 0; k < n; k++) {
+            title_t *t = &titles[members[k]];
+            title_src_t src;
+            if (!prepared[k] || src_open(&src, root, t->tid))
+                continue;
+            if (register_finish(&src)) {
+                if (retry_failed(t->tid))
+                    notify("Failed to add %s (%s), it is tried again every few minutes", t->name, t->tid);
             } else {
                 retry_clear(t->tid);
                 ok++;
-                notify("%s ready to play", src.name);
+                if (!grouped)
+                    notify("%s ready to play", t->name);
             }
+            src_close(&src);
         }
-        src_close(&src);
+        done += n;
     }
+    free(members);
+    free(ids);
+    free(prepared);
     if (pending > 1)
-        notify("%s: %d of %d game(s) added", label, ok, pending);
+        notify("%s: %d of %d game(s) added%s", label, ok, pending, ok == pending ? ", ready to play" : "");
 }
 
 /* Releases mounts over /user/app/<TID> of older versions, which mounted the drive
