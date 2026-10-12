@@ -110,6 +110,25 @@ To delete the game for good, delete its `/ps4/CUSAxxxxx` folder from the drive o
 - If a game fails to start right after being added, start it again. The log (panel > **Log**) shows
   what happened.
 
+## Reporting problems
+
+If something does not work, open an issue at
+[github.com/gasb07/ps4mount/issues](https://github.com/gasb07/ps4mount/issues) with:
+
+1. **PS4Mount version**: shown at the top of the web panel and in the startup notification.
+2. **PS5 firmware** and the **jailbreak / HEN** you use, with its version (for example etaHEN 2.x
+   with kstuff).
+3. **The game**: name and title ID (`CUSAxxxxx`), and whether it has an update (the version shown
+   in the panel).
+4. **What happened**: what you did, what you expected, and the exact message or error code shown on
+   the console.
+5. **The log**: open the web panel, click **Log** and copy the text, or download
+   `/data/ps4mount/log.txt` over FTP. Include the part from the moment the problem happened.
+6. **Your setup**: whether klogsrv is running, how the drive is formatted (exFAT) and other payloads
+   you load at the same time.
+
+Do not attach `.pkg` files or links to them.
+
 ## How it works
 
 A PS4 PKG install on the PS5 is mostly a byte copy of the package to `/user/app/<TITLE_ID>/app.pkg`
