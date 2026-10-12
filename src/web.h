@@ -13,6 +13,9 @@ int app_add(const char *tid, char *msg, size_t cap);
 int app_remove(const char *tid, char *msg, size_t cap);
 void app_rescan(void);
 void app_stop(void);
+void app_config_json(buf_t *out);
+/* body: form-encoded settings; 0 when saved, msg says why not. */
+int app_config_set(const char *body, char *msg, size_t cap);
 /* Fills an icon0.png for tid; 0 on success. */
 int app_icon(const char *tid, buf_t *out);
 

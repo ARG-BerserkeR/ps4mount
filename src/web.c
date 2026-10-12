@@ -117,13 +117,28 @@ void web_serve(int listen_fd) {
         return;
     struct timeval tv = {5, 0};
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    char req[4096];
+    char req[8192];
     ssize_t n = read(fd, req, sizeof(req) - 1);
     if (n <= 0) {
         close(fd);
         return;
     }
     req[n] = 0;
+    /* the body of a POST may arrive after the headers */
+    char *body = strstr(req, "\r\n\r\n");
+    const char *cl = strstr(req, "Content-Length:");
+    if (!cl)
+        cl = strstr(req, "content-length:");
+    long want = cl ? strtol(cl + 15, NULL, 10) : 0;
+    while (want > 0 && (size_t)n < sizeof(req) - 1 && (!body || (long)(n - (body + 4 - req)) < want)) {
+        ssize_t m = read(fd, req + n, sizeof(req) - 1 - (size_t)n);
+        if (m <= 0)
+            break;
+        n += m;
+        req[n] = 0;
+        body = strstr(req, "\r\n\r\n");
+    }
+    body = body ? body + 4 : req + n;
     char method[8] = "", path[256] = "", tid[10], msg[256];
     sscanf(req, "%7s %255s", method, path);
     int post = !strcmp(method, "POST");
@@ -160,6 +175,14 @@ void web_serve(int listen_fd) {
     } else if (post && !strcmp(path, "/api/rescan")) {
         app_rescan();
         json_msg(fd, 1, "Scanning USB drives for games");
+    } else if (!strcmp(path, "/api/config") && !post) {
+        buf_t b = {0};
+        app_config_json(&b);
+        reply(fd, "200 OK", "application/json; charset=utf-8", b.data, b.len);
+        buf_free(&b);
+    } else if (post && !strcmp(path, "/api/config")) {
+        int rc = app_config_set(body, msg, sizeof(msg));
+        json_msg(fd, !rc, msg);
     } else if (!strcmp(path, "/api/log")) {
         send_log(fd);
     } else if (post && !strcmp(path, "/api/stop")) {

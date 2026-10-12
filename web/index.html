@@ -35,6 +35,13 @@ main{padding:20px;max-width:1400px;margin:0 auto}
 dialog{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:12px;max-width:min(900px,95vw);width:900px}
 dialog::backdrop{background:#000a}
 pre{white-space:pre-wrap;font-size:12px;max-height:60vh;overflow:auto;background:#0b0d11;padding:12px;border-radius:8px}
+form.settings{display:flex;flex-direction:column;gap:14px}
+form.settings label{display:flex;flex-direction:column;gap:6px}
+form.settings label.check{flex-direction:row;align-items:center;gap:10px}
+form.settings textarea,form.settings input[type=number]{background:#0b0d11;color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:inherit}
+form.settings textarea{min-height:90px;resize:vertical;font-family:ui-monospace,Consolas,monospace}
+form.settings .hint{color:var(--muted);font-size:13px}
+form.settings .row{display:flex;gap:8px;justify-content:flex-end}
 #toast{position:fixed;right:20px;bottom:20px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 16px;display:none;max-width:420px}
 </style>
 </head>
@@ -44,6 +51,7 @@ pre{white-space:pre-wrap;font-size:12px;max-height:60vh;overflow:auto;background
   <div class="bar">
     <input id="q" type="search" placeholder="Search game or CUSA">
     <button id="rescan" class="primary">Scan for games</button>
+    <button id="settingsbtn">Settings</button>
     <button id="logbtn">Log</button>
     <button id="stop" class="danger">Stop</button>
   </div>
@@ -53,6 +61,20 @@ pre{white-space:pre-wrap;font-size:12px;max-height:60vh;overflow:auto;background
   <div class="grid" id="grid"></div>
   <div class="empty" id="empty" hidden>No PS4 games found. Put the .pkg files (game and update) in the root of a USB drive.</div>
 </main>
+<dialog id="setdlg"><h3>Settings</h3>
+<form class="settings" id="setform">
+  <label>Folders to search for pkgs (one per line, relative to each drive)
+    <textarea id="s-paths" spellcheck="false"></textarea>
+    <span class="hint">/ is the root of the drive. Games are moved into the ps4 folder, so it cannot be used here.</span>
+  </label>
+  <label class="check"><input type="checkbox" id="s-batch"> Add new games in groups</label>
+  <label>Games per group
+    <input type="number" id="s-size" min="1" max="50">
+    <span class="hint">Smaller groups are gentler on the system when many games are added at once.</span>
+  </label>
+  <label class="check"><input type="checkbox" id="s-dlc"> Install add-ons (DLC)</label>
+  <div class="row"><button type="button" id="s-cancel">Cancel</button><button class="primary" type="submit">Save</button></div>
+</form></dialog>
 <dialog id="logdlg"><h3>Log</h3><pre id="log"></pre><form method="dialog"><button>Close</button></form></dialog>
 <div id="toast"></div>
 <script>
@@ -115,6 +137,27 @@ $('grid').addEventListener('click', function (e) {
 $('q').addEventListener('input', render);
 $('rescan').onclick = function () { api('/api/rescan', 'POST').then(function (j) { toast(j.message); setTimeout(load, 3000); }); };
 $('logbtn').onclick = function () { api('/api/log').then(function (j) { $('log').textContent = j.log; $('logdlg').showModal(); }); };
+$('settingsbtn').onclick = function () {
+  api('/api/config').then(function (c) {
+    $('s-paths').value = c.paths.join('\n');
+    $('s-batch').checked = c.batch;
+    $('s-size').value = c.batch_size;
+    $('s-dlc').checked = c.dlc;
+    $('s-size').disabled = !c.batch;
+    $('setdlg').showModal();
+  }).catch(function (e) { toast('Could not read the settings: ' + e.message); });
+};
+$('s-batch').onchange = function () { $('s-size').disabled = !this.checked; };
+$('s-cancel').onclick = function () { $('setdlg').close(); };
+$('setform').onsubmit = function (e) {
+  e.preventDefault();
+  var body = 'batch=' + ($('s-batch').checked ? 1 : 0) + '&batch_size=' + encodeURIComponent($('s-size').value) +
+    '&dlc=' + ($('s-dlc').checked ? 1 : 0) + '&paths=' + encodeURIComponent($('s-paths').value);
+  fetch('/api/config', {method: 'POST', cache: 'no-store', headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: body})
+    .then(function (r) { return r.json(); })
+    .then(function (j) { toast(j.message || j.error); if (j.ok) $('setdlg').close(); })
+    .catch(function (err) { toast('Error: ' + err.message); });
+};
 $('stop').onclick = function () {
   if (!confirm('Stop PS4Mount? The games stay unavailable until it is loaded again.')) return;
   api('/api/stop', 'POST').then(function (j) { toast(j.message); });

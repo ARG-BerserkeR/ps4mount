@@ -93,8 +93,20 @@ Buttons:
 - **Remove from library**: removes the game from the home screen. The `.pkg` stays on the drive.
 - **Add to library**: adds a removed game back.
 - **Scan for games**: checks the drives now and shows how many games were found on each one.
+- **Settings**: see below.
 - **Log**: shows the PS4Mount log.
 - **Stop**: stops PS4Mount. Its games cannot start until it is loaded again.
+
+### Settings
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| Folders to search for pkgs | `/` | Folders, relative to each drive, where new `.pkg` files are picked up (one per line). `/` is the root. The `ps4` folder cannot be used: it holds the games already moved. |
+| Add new games in groups | On | Adds many new games in groups instead of one after the other, which keeps the console stable when a drive has a lot of games. |
+| Games per group | 5 | Size of each group (1 to 50). |
+| Install add-ons (DLC) | On | Moves and installs add-on `.pkg` files. When off, add-ons are left where they are. |
+
+Settings are saved in `/data/ps4mount/config.txt`.
 
 The panel has no password. Anyone on your local network can open it.
 

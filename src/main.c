@@ -54,13 +54,19 @@
 #define BATCH_QUIET 10 /* seconds without writes to the system databases between groups */
 #define MAX_DLC_TIDS 8
 
-/* Settings (defaults below). */
+#define MAX_SCAN_PATHS 8
+#define CONFIG_PATH STATE_DIR "/config.txt"
+
+/* Settings, kept in CONFIG_PATH and edited in the panel. */
 typedef struct {
     int batch;      /* new games are added in groups */
     int batch_size; /* games per group */
+    int dlc;        /* add-ons are moved and installed */
+    char paths[MAX_SCAN_PATHS][128]; /* folders searched for pkgs, relative to each drive; "" is the root */
+    int npaths;
 } config_t;
 
-static config_t g_cfg = {1, 5};
+static config_t g_cfg = {1, 5, 1, {""}, 1};
 
 typedef struct { char useless[45]; char message[3075]; } notify_request_t;
 int sceUserServiceInitialize(void *);
@@ -312,7 +318,8 @@ static int src_open(title_src_t *t, const char *root, const char *tid) {
         for (int i = 0; i < 32; i++)
             snprintf(digest + i * 2, 3, "%02x", t->patch.digest[i]);
     snprintf(t->marker, sizeof(t->marker), "%s\n%s\n", t->dir, t->has_patch ? digest : "nopatch");
-    dlc_open(t);
+    if (g_cfg.dlc)
+        dlc_open(t);
     if (t->ndlc) {
         /* one line for all add-ons, so markers of titles without add-ons stay as before */
         uint8_t h[32];
@@ -1104,11 +1111,12 @@ static int adopt_dlc(const char *root, const char *name, const char *path, pkg_t
     return 1;
 }
 
-/* Moves PS4 game (gd) and update (gp) pkgs from the storage root into
- * <root>/ps4/<TID>/app.pkg and patch.pkg, then add-ons (ac) next to their game. */
-static int adopt_root_pkgs(const char *root) {
+/* Moves PS4 game (gd) and update (gp) pkgs found in dir (the drive root or a scan
+ * folder) into <root>/ps4/<TID>/app.pkg and patch.pkg, then add-ons (ac) next to
+ * their game. */
+static int adopt_dir_pkgs(const char *root, const char *dir) {
     int moved = 0;
-    DIR *d = opendir(root);
+    DIR *d = opendir(dir);
     if (!d)
         return 0;
     struct dirent *e;
@@ -1118,7 +1126,7 @@ static int adopt_root_pkgs(const char *root) {
         size_t n = strlen(e->d_name);
         if (n < 5 || strcasecmp(e->d_name + n - 4, ".pkg"))
             continue;
-        snprintf(path, sizeof(path), "%s/%s", root, e->d_name);
+        snprintf(path, sizeof(path), "%s/%s", dir, e->d_name);
         pkg_t pkg;
         if (pkg_open(&pkg, path))
             continue;
@@ -1129,9 +1137,12 @@ static int adopt_root_pkgs(const char *root) {
         int is_app = cat && !strcmp(cat->sval, "gd"), is_patch = cat && !strcmp(cat->sval, "gp");
         int is_dlc = cat && !strcmp(cat->sval, "ac");
         if (is_dlc || pass == 1) {
-            /* add-ons go in the second pass: their game may be in this root too */
+            /* add-ons go in the second pass: their game may be in this folder too */
             if (pass == 1 && is_dlc && !strncmp(pkg.title_id, "CUSA", 4)) {
-                if (pkg_fake_key(&pkg))
+                if (!g_cfg.dlc) {
+                    if (first_time(path))
+                        printf("[scan] skip %s (add-ons are turned off)\n", path);
+                } else if (pkg_fake_key(&pkg))
                     moved += adopt_dlc(root, e->d_name, path, &pkg);
                 else if (first_time(path))
                     printf("[scan] skip %s (not a fake add-on pkg)\n", path);
@@ -1204,12 +1215,15 @@ typedef struct {
 
 /* A ps4/ folder or a .pkg in the root. Other partitions (like the boot partition
  * Ventoy adds to a drive) are skipped without a notification. */
-static int has_candidates(const char *root) {
-    char p[PATH_MAX];
-    snprintf(p, sizeof(p), "%s/ps4", root);
-    if (exists(p))
-        return 1;
-    DIR *d = opendir(root);
+static void scan_dir(char *out, size_t n, const char *root, int i) {
+    if (g_cfg.paths[i][0])
+        snprintf(out, n, "%s/%s", root, g_cfg.paths[i]);
+    else
+        snprintf(out, n, "%s", root);
+}
+
+static int has_pkg(const char *dir) {
+    DIR *d = opendir(dir);
     if (!d)
         return 0;
     struct dirent *e;
@@ -1266,6 +1280,29 @@ static void retry_clear(const char *tid) {
     retry_t *r = retry_entry(tid, 0);
     if (r)
         memset(r, 0, sizeof(*r));
+}
+
+static int has_candidates(const char *root) {
+    char p[PATH_MAX];
+    snprintf(p, sizeof(p), "%s/ps4", root);
+    if (exists(p))
+        return 1;
+    for (int i = 0; i < g_cfg.npaths; i++) {
+        scan_dir(p, sizeof(p), root, i);
+        if (has_pkg(p))
+            return 1;
+    }
+    return 0;
+}
+
+static int adopt_root_pkgs(const char *root) {
+    char dir[PATH_MAX];
+    int moved = 0;
+    for (int i = 0; i < g_cfg.npaths; i++) {
+        scan_dir(dir, sizeof(dir), root, i);
+        moved += adopt_dir_pkgs(root, dir);
+    }
+    return moved;
 }
 
 /* Add-ons deleted on the console come back with their game: drive reconnected or
@@ -1837,6 +1874,157 @@ int app_remove(const char *tid, char *msg, size_t cap) {
     return rc ? -1 : 0;
 }
 
+/* --- settings --- */
+
+/* A scan folder: relative to the drive, "" for the root. Folders inside ps4/ (where
+ * PS4Mount keeps the games) and anything leaving the drive are refused. */
+static int clean_scan_path(const char *in, char *out, size_t n, char *why, size_t wn) {
+    while (*in == ' ' || *in == '/')
+        in++;
+    snprintf(out, n, "%s", in);
+    size_t l = strlen(out);
+    while (l && (out[l - 1] == ' ' || out[l - 1] == '/' || out[l - 1] == '\r'))
+        out[--l] = 0;
+    if (l >= 120) {
+        snprintf(why, wn, "folder name too long: %.40s...", out);
+        return -1;
+    }
+    if (strchr(out, '\\') || strchr(out, ':') || strstr(out, "//")) {
+        snprintf(why, wn, "invalid folder: %s", out);
+        return -1;
+    }
+    for (const char *c = out; *c; c = strchr(c, '/') ? strchr(c, '/') + 1 : c + strlen(c))
+        if (!strncmp(c, "..", 2) && (c[2] == '/' || !c[2])) {
+            snprintf(why, wn, "folders outside the drive are not allowed: %s", out);
+            return -1;
+        }
+    if (!strncasecmp(out, "ps4", 3) && (!out[3] || out[3] == '/')) {
+        snprintf(why, wn, "the ps4 folder holds the games PS4Mount already moved; choose another folder");
+        return -1;
+    }
+    return 0;
+}
+
+static void config_save(void) {
+    buf_t b = {0};
+    buf_printf(&b, "batch=%d\nbatch_size=%d\ndlc=%d\n", g_cfg.batch, g_cfg.batch_size, g_cfg.dlc);
+    for (int i = 0; i < g_cfg.npaths; i++)
+        buf_printf(&b, "path=%s\n", g_cfg.paths[i]);
+    write_file(CONFIG_PATH, b.data, b.len, 0666);
+    buf_free(&b);
+}
+
+static void config_load(void) {
+    FILE *f = fopen(CONFIG_PATH, "r");
+    if (!f)
+        return;
+    config_t c = g_cfg;
+    c.npaths = 0;
+    char line[256], why[160], path[128];
+    while (fgets(line, sizeof(line), f)) {
+        line[strcspn(line, "\r\n")] = 0;
+        if (!strncmp(line, "batch=", 6))
+            c.batch = atoi(line + 6) != 0;
+        else if (!strncmp(line, "batch_size=", 11))
+            c.batch_size = atoi(line + 11);
+        else if (!strncmp(line, "dlc=", 4))
+            c.dlc = atoi(line + 4) != 0;
+        else if (!strncmp(line, "path=", 5) && c.npaths < MAX_SCAN_PATHS &&
+                 !clean_scan_path(line + 5, path, sizeof(path), why, sizeof(why)))
+            snprintf(c.paths[c.npaths++], sizeof(c.paths[0]), "%s", path);
+    }
+    fclose(f);
+    if (c.batch_size < 1 || c.batch_size > 50)
+        c.batch_size = 5;
+    if (!c.npaths)
+        c.npaths = 1; /* the root */
+    g_cfg = c;
+    printf("[config] batch=%d batch_size=%d dlc=%d folders=%d\n", g_cfg.batch, g_cfg.batch_size, g_cfg.dlc,
+           g_cfg.npaths);
+}
+
+void app_config_json(buf_t *out) {
+    buf_printf(out, "{\"batch\":%s,\"batch_size\":%d,\"dlc\":%s,\"paths\":[", g_cfg.batch ? "true" : "false",
+               g_cfg.batch_size, g_cfg.dlc ? "true" : "false");
+    for (int i = 0; i < g_cfg.npaths; i++) {
+        char shown[130];
+        snprintf(shown, sizeof(shown), "/%s", g_cfg.paths[i]);
+        buf_printf(out, "%s", i ? "," : "");
+        json_str(out, shown);
+    }
+    buf_printf(out, "]}");
+}
+
+static void url_decode(const char *in, size_t len, char *out, size_t n) {
+    size_t o = 0;
+    for (size_t i = 0; i < len && o + 1 < n; i++) {
+        if (in[i] == '+')
+            out[o++] = ' ';
+        else if (in[i] == '%' && i + 2 < len) {
+            char hex[3] = {in[i + 1], in[i + 2], 0};
+            out[o++] = (char)strtol(hex, NULL, 16);
+            i += 2;
+        } else
+            out[o++] = in[i];
+    }
+    out[o] = 0;
+}
+
+/* body: batch=0|1&batch_size=N&dlc=0|1&paths=<folders, one per line> (form encoded). */
+int app_config_set(const char *body, char *msg, size_t cap) {
+    config_t c = g_cfg;
+    char value[1200], why[160] = "";
+    for (const char *p = body; p && *p;) {
+        const char *amp = strchr(p, '&'), *eq = strchr(p, '=');
+        size_t len = amp ? (size_t)(amp - p) : strlen(p);
+        if (eq && eq < p + len) {
+            url_decode(eq + 1, (size_t)(p + len - eq - 1), value, sizeof(value));
+            size_t k = (size_t)(eq - p);
+            if (k == 5 && !strncmp(p, "batch", 5))
+                c.batch = atoi(value) != 0;
+            else if (k == 10 && !strncmp(p, "batch_size", 10))
+                c.batch_size = atoi(value);
+            else if (k == 3 && !strncmp(p, "dlc", 3))
+                c.dlc = atoi(value) != 0;
+            else if (k == 5 && !strncmp(p, "paths", 5)) {
+                c.npaths = 0;
+                for (char *line = strtok(value, "\n"); line; line = strtok(NULL, "\n")) {
+                    char path[128];
+                    if (clean_scan_path(line, path, sizeof(path), why, sizeof(why))) {
+                        snprintf(msg, cap, "Not saved: %s", why);
+                        return -1;
+                    }
+                    int dup = 0;
+                    for (int i = 0; i < c.npaths; i++)
+                        dup |= !strcmp(c.paths[i], path);
+                    if (dup)
+                        continue;
+                    if (c.npaths == MAX_SCAN_PATHS) {
+                        snprintf(msg, cap, "Not saved: at most %d folders", MAX_SCAN_PATHS);
+                        return -1;
+                    }
+                    snprintf(c.paths[c.npaths++], sizeof(c.paths[0]), "%s", path);
+                }
+            }
+        }
+        p = amp ? amp + 1 : NULL;
+    }
+    if (c.batch_size < 1 || c.batch_size > 50) {
+        snprintf(msg, cap, "Not saved: games per group must be between 1 and 50");
+        return -1;
+    }
+    if (!c.npaths) {
+        snprintf(msg, cap, "Not saved: add at least one folder (/ is the drive root)");
+        return -1;
+    }
+    g_cfg = c;
+    config_save();
+    printf("[config] saved: batch=%d batch_size=%d dlc=%d folders=%d\n", c.batch, c.batch_size, c.dlc, c.npaths);
+    g_next_scan = 0;
+    snprintf(msg, cap, "Settings saved");
+    return 0;
+}
+
 /* --- Media tab shortcut (category 65536 + deeplinkUri, as other PS5 web panels) --- */
 
 #define PANEL_ID "PMNT00001"
@@ -1993,6 +2181,7 @@ int main(void) {
     mkdirs(STATE_DIR, 0777);
     freopen(STATE_DIR "/log.txt", "a", stdout);
     setvbuf(stdout, NULL, _IOLBF, 0);
+    config_load();
     signal(SIGPIPE, SIG_IGN);
     install_panel_shortcut();
     g_web = web_listen();
