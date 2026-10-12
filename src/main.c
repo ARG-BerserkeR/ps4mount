@@ -1202,10 +1202,9 @@ static int adopt_dlc(const char *root, const char *name, const char *path, pkg_t
     char game[10], dst[PATH_MAX];
     if (find_dlc_game(root, pkg, game)) {
         if (first_time(path)) {
-            char internal[PATH_MAX];
-            snprintf(internal, sizeof(internal), "/user/app/%s/app.pkg", pkg->title_id);
+            /* a game served from another drive is mounted there too: only a real install counts */
             printf("[scan] %s: no game for add-on %s on the drive%s, waiting\n", name, pkg->content_id,
-                   exists(internal) ? " (that title is installed on the console)" : "");
+                   installed_internally(pkg->title_id) ? " (that title is installed on the console)" : "");
             g_dlc_orphans++;
         }
         waiting_set(path, g_lib_sig);
