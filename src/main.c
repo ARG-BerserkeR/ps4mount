@@ -1090,16 +1090,98 @@ static int find_dlc_game(const char *root, const pkg_t *dlc, char *tid) {
 /* Add-ons left in place during one adoption run, reported in one notification. */
 static int g_dlc_orphans, g_dlc_dupes;
 
+/* Add-ons waiting for their game: checked again only when the games of the drive
+ * change (the check opens the pkg of every game). */
+typedef struct {
+    char *path;
+    unsigned long sig;
+} waiting_t;
+
+static waiting_t *g_waiting;
+static size_t g_nwaiting, g_capwaiting;
+static unsigned long g_lib_sig; /* games of the drive being scanned */
+
+/* Signature of the games in <root>/ps4: changes when a game is added or removed. */
+static unsigned long lib_signature(const char *root) {
+    char lib[PATH_MAX], p[PATH_MAX];
+    snprintf(lib, sizeof(lib), "%s/ps4", root);
+    DIR *d = opendir(lib);
+    if (!d)
+        return 0;
+    struct dirent *e;
+    unsigned long sig = 5381;
+    while ((e = readdir(d))) {
+        if (strlen(e->d_name) != 9 || strncmp(e->d_name, "CUSA", 4))
+            continue;
+        snprintf(p, sizeof(p), "%s/%s/app.pkg", lib, e->d_name);
+        if (!exists(p))
+            continue;
+        unsigned long h = 0;
+        for (const char *c = e->d_name; *c; c++)
+            h = h * 33 + (unsigned char)*c;
+        sig += h; /* order independent */
+    }
+    closedir(d);
+    return sig;
+}
+
+static waiting_t *waiting_find(const char *path) {
+    for (size_t i = 0; i < g_nwaiting; i++)
+        if (!strcmp(g_waiting[i].path, path))
+            return &g_waiting[i];
+    return NULL;
+}
+
+static void waiting_set(const char *path, unsigned long sig) {
+    waiting_t *w = waiting_find(path);
+    if (w) {
+        w->sig = sig;
+        return;
+    }
+    if (g_nwaiting == g_capwaiting) {
+        size_t cap = g_capwaiting ? g_capwaiting * 2 : 64;
+        waiting_t *grown = realloc(g_waiting, cap * sizeof(*grown));
+        if (!grown)
+            return;
+        g_waiting = grown;
+        g_capwaiting = cap;
+    }
+    if ((g_waiting[g_nwaiting].path = strdup(path)))
+        g_waiting[g_nwaiting++].sig = sig;
+}
+
+static void waiting_drop(const char *path) {
+    waiting_t *w = waiting_find(path);
+    if (!w)
+        return;
+    free(w->path);
+    *w = g_waiting[--g_nwaiting];
+}
+
+/* Add-ons of root still waiting for their game. */
+static int waiting_count(const char *root) {
+    size_t l = strlen(root);
+    int n = 0;
+    for (size_t i = 0; i < g_nwaiting; i++)
+        n += !strncmp(g_waiting[i].path, root, l) && g_waiting[i].path[l] == '/' && exists(g_waiting[i].path);
+    return n;
+}
+
 /* Moves an add-on pkg (ac) into <root>/ps4/<GAME>/addcont/<ADD-ON TID>/<LABEL>/ac.pkg. */
 static int adopt_dlc(const char *root, const char *name, const char *path, pkg_t *pkg) {
     char game[10], dst[PATH_MAX];
     if (find_dlc_game(root, pkg, game)) {
         if (first_time(path)) {
-            printf("[scan] %s: no game for add-on %s on the drive, left in place\n", name, pkg->content_id);
+            char internal[PATH_MAX];
+            snprintf(internal, sizeof(internal), "/user/app/%s/app.pkg", pkg->title_id);
+            printf("[scan] %s: no game for add-on %s on the drive%s, waiting\n", name, pkg->content_id,
+                   exists(internal) ? " (that title is installed on the console)" : "");
             g_dlc_orphans++;
         }
+        waiting_set(path, g_lib_sig);
         return 0;
     }
+    waiting_drop(path);
     snprintf(dst, sizeof(dst), "%s/ps4/%s/addcont/%s/%s", root, game, pkg->title_id, pkg->content_id + 20);
     mkdirs(dst, 0777);
     snprintf(dst, sizeof(dst), "%s/ps4/%s/addcont/%s/%s/ac.pkg", root, game, pkg->title_id, pkg->content_id + 20);
@@ -1129,11 +1211,16 @@ static int adopt_dir_pkgs(const char *root, const char *dir) {
     struct dirent *e;
     char path[PATH_MAX], dst[PATH_MAX];
     for (int pass = 0; pass < 2; pass++, rewinddir(d)) {
+    if (pass == 1)
+        g_lib_sig = lib_signature(root); /* games moved in pass 0 count */
     while ((e = readdir(d))) {
         size_t n = strlen(e->d_name);
         if (n < 5 || strcasecmp(e->d_name + n - 4, ".pkg"))
             continue;
         snprintf(path, sizeof(path), "%s/%s", dir, e->d_name);
+        waiting_t *w = waiting_find(path);
+        if (w && w->sig == g_lib_sig)
+            continue; /* waiting add-on, and no new game since the last check */
         pkg_t pkg;
         if (pkg_open(&pkg, path))
             continue;
@@ -1306,13 +1393,14 @@ static int adopt_root_pkgs(const char *root) {
     char dir[PATH_MAX];
     int moved = 0;
     g_dlc_orphans = g_dlc_dupes = 0;
+    g_lib_sig = lib_signature(root);
     for (int i = 0; i < g_cfg.npaths; i++) {
         scan_dir(dir, sizeof(dir), root, i);
         moved += adopt_dir_pkgs(root, dir);
     }
     if (g_dlc_orphans)
-        notify("%s: %d add-on(s) were left in place because their game is not on this drive (see the log)",
-               root + 5, g_dlc_orphans);
+        notify("%s: %d add-on(s) wait for their game, which is not on this drive (see the log)", root + 5,
+               waiting_count(root));
     if (g_dlc_dupes)
         notify("%s: %d add-on copy(ies) were left in place because the game already has them", root + 5, g_dlc_dupes);
     return moved;
