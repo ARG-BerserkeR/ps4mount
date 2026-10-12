@@ -740,8 +740,33 @@ typedef struct {
     int state;
 } title_t;
 
+/* A ps4/ folder or a .pkg in the root. Other partitions (like the boot partition
+ * Ventoy adds to a drive) are skipped without a notification. */
+static int has_candidates(const char *root) {
+    char p[PATH_MAX];
+    snprintf(p, sizeof(p), "%s/ps4", root);
+    if (exists(p))
+        return 1;
+    DIR *d = opendir(root);
+    if (!d)
+        return 0;
+    struct dirent *e;
+    int found = 0;
+    while (!found && (e = readdir(d))) {
+        size_t n = strlen(e->d_name);
+        found = n > 4 && !strcasecmp(e->d_name + n - 4, ".pkg");
+    }
+    closedir(d);
+    return found;
+}
+
 static void scan_root(const char *root, int fresh, int reconnected) {
     const char *label = root + 5; /* "usb0" / "ext0" */
+    if (!has_candidates(root)) {
+        if (fresh)
+            printf("[scan] %s: no ps4 folder or pkg, skipped\n", root);
+        return;
+    }
     if (fresh)
         notify("Scanning %s for PS4 games...", label);
     int moved = adopt_root_pkgs(root);
