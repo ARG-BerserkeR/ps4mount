@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 gasb07
- * Minimal HTTP server for the PS4 Mount panel. */
-/* Minimal HTTP server for the PS4 Mount panel (one request per connection). */
+ * Minimal HTTP server for the PS4Mount panel. */
+/* Minimal HTTP server for the PS4Mount panel (one request per connection). */
 #include "web.h"
 
 #include <fcntl.h>
@@ -163,7 +163,7 @@ void web_serve(int listen_fd) {
     } else if (!strcmp(path, "/api/log")) {
         send_log(fd);
     } else if (post && !strcmp(path, "/api/stop")) {
-        json_msg(fd, 1, "PS4 Mount is stopping");
+        json_msg(fd, 1, "PS4Mount is stopping");
         app_stop();
     } else {
         reply(fd, "404 Not Found", "text/plain", "not found\n", 10);

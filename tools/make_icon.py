@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Draws assets/icon0.png (512x512) for the PS4 Mount Media tab shortcut."""
+"""Draws assets/icon0.png (512x512) for the PS4Mount Media tab shortcut."""
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 gasb07
- * PS4 Mount daemon: scans USB drives, registers PS4 fpkgs without installing them, follows klog and serves the web panel. */
+ * PS4Mount daemon: scans USB drives, registers PS4 fpkgs without installing them, follows klog and serves the web panel. */
 /* ps4mount: run PS4 fpkgs from external storage without installing them.
  *
  * Every scan:
@@ -37,7 +37,7 @@
 #include "web.h"
 #include "icon_data.h"
 
-#define VERSION "PS4 Mount 0.3.0"
+#define VERSION "PS4Mount 0.3.1"
 #define LOCK_PORT 9032
 #define SCAN_SECONDS 10
 #define STATE_DIR "/data/ps4mount"
@@ -1144,7 +1144,7 @@ static const char k_panel_param[] =
     "    \"localizedParameters\": {\n"
     "        \"defaultLanguage\": \"en-US\",\n"
     "        \"en-US\": {\n"
-    "            \"titleName\": \"PS4 Mount\"\n"
+    "            \"titleName\": \"PS4Mount\"\n"
     "        }\n"
     "    }\n"
     "}\n";
@@ -1183,7 +1183,7 @@ static void install_panel_shortcut(void) {
     rc = sceAppInstUtilAppInstallAll(NULL);
     printf("[panel] shortcut install rc=0x%08x\n", rc);
     if (!rc)
-        notify("PS4 Mount added to the Media tab");
+        notify("PS4Mount added to the Media tab");
 }
 
 static int single_instance(void) {

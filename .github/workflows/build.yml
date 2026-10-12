@@ -41,7 +41,7 @@ jobs:
       - name: Check that the tag matches the version
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
-          version=$(sed -n 's/^#define VERSION "PS4 Mount \(.*\)"$/\1/p' src/main.c)
+          version=$(sed -n 's/^#define VERSION "PS4Mount \(.*\)"$/\1/p' src/main.c)
           if [ "v${version}" != "${GITHUB_REF_NAME}" ]; then
             echo "::error::Tag ${GITHUB_REF_NAME} does not match VERSION \"${version}\" in src/main.c"
             exit 1
@@ -78,5 +78,5 @@ jobs:
         run: |
           gh release create "${GITHUB_REF_NAME}" ps4mount.elf ps4mount.elf.sha256 \
             --repo "${GITHUB_REPOSITORY}" \
-            --title "PS4 Mount ${GITHUB_REF_NAME#v}" \
+            --title "PS4Mount ${GITHUB_REF_NAME#v}" \
             --generate-notes

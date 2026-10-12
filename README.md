@@ -1,13 +1,13 @@
-# PS4 Mount
+# PS4Mount
 
 Play PS4 fake PKGs on a jailbroken PS5 straight from a USB drive, without installing them.
 
 Put the game (and its update) `.pkg` files on a USB drive, plug it in and load `ps4mount.elf`.
-PS4 Mount finds the packages, adds the games to the home screen and lets you play them from the
+PS4Mount finds the packages, adds the games to the home screen and lets you play them from the
 drive. Nothing is copied to the console storage, and deleting a game on the console only removes
 it from the library: the `.pkg` stays on the drive.
 
-![PS4 Mount icon](assets/icon0.png)
+![PS4Mount icon](assets/icon0.png)
 
 ## Features
 
@@ -17,7 +17,7 @@ it from the library: the `.pkg` stays on the drive.
 - Games run from the drive; no internal storage is used for the packages.
 - Deleting a game from the PS5 removes it from the library only. The `.pkg` is never deleted.
 - Notifications for found, added and removed games.
-- A web panel, also available as **PS4 Mount** in the **Media** tab, to see the games and add or
+- A web panel, also available as **PS4Mount** in the **Media** tab, to see the games and add or
   remove them from the library.
 
 ## Requirements
@@ -26,7 +26,7 @@ it from the library: the `.pkg` stays on the drive.
   Tested on firmware **13.20**. Other firmware versions are untested.
 - An ELF loader listening on port **9021** to send the payload.
 - Access to the kernel log: either **klogsrv** running on port 3232, or no other payload reading
-  `/dev/klog`. PS4 Mount reads the system log to know when a game starts and when a delete is
+  `/dev/klog`. PS4Mount reads the system log to know when a game starts and when a delete is
   confirmed. Without it, games cannot start (see [How it works](#how-it-works)).
 - A USB drive formatted as **exFAT**.
 - PS4 **fake** PKGs (game, and optionally its update). Retail PKGs and DLC are not supported.
@@ -47,7 +47,7 @@ Download `ps4mount.elf` from the [Releases](https://github.com/gasb07/ps4mount/r
    - `<game name> ready to play`
 5. Start the game from the home screen.
 
-On the first run PS4 Mount moves every package it uses into a folder per game on the same drive:
+On the first run PS4Mount moves every package it uses into a folder per game on the same drive:
 
 ```
 /ps4/CUSAxxxxx/app.pkg      game
@@ -58,7 +58,7 @@ Keep this layout. To add more games later, copy their `.pkg` files to the root o
 
 ### Web panel
 
-Open **PS4 Mount** in the **Media** tab, or browse to `http://<PS5 IP>:8770` from any device on
+Open **PS4Mount** in the **Media** tab, or browse to `http://<PS5 IP>:8770` from any device on
 the same network. The panel shows every game found on the connected drives, with its state:
 
 | State | Meaning |
@@ -67,15 +67,15 @@ the same network. The panel shows every game found on the connected drives, with
 | Running | The game is open |
 | Not in library | Removed from the library; the `.pkg` is still on the drive |
 | Adding | Being added to the library |
-| Installed on console | A normal installation of this game exists; PS4 Mount leaves it alone |
+| Installed on console | A normal installation of this game exists; PS4Mount leaves it alone |
 
 Buttons:
 
 - **Remove from library**: removes the game from the home screen. The `.pkg` stays on the drive.
 - **Add to library**: adds a removed game back.
 - **Scan for games**: checks the drives now instead of waiting for the next scan (every 10 seconds).
-- **Log**: shows the PS4 Mount log.
-- **Stop**: stops PS4 Mount. Its games cannot start until it is loaded again.
+- **Log**: shows the PS4Mount log.
+- **Stop**: stops PS4Mount. Its games cannot start until it is loaded again.
 
 The panel has no password. Anyone on your local network can open it.
 
@@ -89,8 +89,8 @@ To delete the game for good, delete its `/ps4/CUSAxxxxx` folder from the drive o
 
 ## Good to know
 
-- Load PS4 Mount soon after every boot. While it is not running, the console does not see the
-  packages and may hide the games; they come back as soon as PS4 Mount runs again.
+- Load PS4Mount soon after every boot. While it is not running, the console does not see the
+  packages and may hide the games; they come back as soon as PS4Mount runs again.
 - Do not unplug the drive while a game is running.
 - When a game with an update is added, the PS5's own "installed" notification may show the base
   version (for example 01.00). The game runs with the update; the library shows the right version.
@@ -101,7 +101,7 @@ To delete the game for good, delete its `/ps4/CUSAxxxxx` folder from the drive o
 ## How it works
 
 A PS4 PKG install on the PS5 is mostly a byte copy of the package to `/user/app/<TITLE_ID>/app.pkg`
-plus some metadata. PS4 Mount skips the copy:
+plus some metadata. PS4Mount skips the copy:
 
 1. It mounts the game folder from the USB drive over `/user/app/<TITLE_ID>` (and over
    `/user/patch/<TITLE_ID>` when there is an update) with `nullfs`.
@@ -114,7 +114,7 @@ plus some metadata. PS4 Mount skips the copy:
    with the update's version.
 4. The drive folder stays **read-only**, so a delete from the console cannot remove the package.
    It becomes writable only while a game is selected or running, because the system needs write
-   access to start it. When a delete is confirmed, PS4 Mount unmounts the drive folders first, so
+   access to start it. When a delete is confirmed, PS4Mount unmounts the drive folders first, so
    the delete only removes the library entry.
 
 State and log are kept in `/data/ps4mount/`. The Media tab shortcut is `PMNT00001`
@@ -143,7 +143,7 @@ Payload SDK release set in `SDK_VERSION`, and keeps `ps4mount.elf` as a build ar
 
 To publish a release:
 
-1. Set the new version in `src/main.c` (`#define VERSION "PS4 Mount X.Y.Z"`) and commit it.
+1. Set the new version in `src/main.c` (`#define VERSION "PS4Mount X.Y.Z"`) and commit it.
 2. Tag the commit and push the tag:
    ```sh
    git tag vX.Y.Z
@@ -166,7 +166,7 @@ release with `ps4mount.elf` and its SHA-256 checksum attached.
 
 ## Credits
 
-PS4 Mount does not contain code copied from other projects except where noted below.
+PS4Mount does not contain code copied from other projects except where noted below.
 
 | Project | Author | License | Use |
 | --- | --- | --- | --- |
@@ -178,7 +178,7 @@ PS4 Mount does not contain code copied from other projects except where noted be
 
 ## License
 
-PS4 Mount is licensed under the GNU General Public License v3.0 or later, see [LICENSE](LICENSE).
+PS4Mount is licensed under the GNU General Public License v3.0 or later, see [LICENSE](LICENSE).
 It links the PS5 Payload SDK runtime (GPL-3.0-or-later). `src/keys.h` carries data published by
 LibOrbisPkg under the LGPL-3.0. SQLite is in the public domain.
 

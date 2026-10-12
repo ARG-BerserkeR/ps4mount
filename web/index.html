@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>PS4 Mount</title>
+<title>PS4Mount</title>
 <style>
 :root{--bg:#0e1116;--panel:#171b22;--line:#262c36;--fg:#e8eaed;--muted:#97a0ab;--accent:#3d7bfd;--ok:#2f9e57;--warn:#c98b1f;--bad:#c2453b}
 *{box-sizing:border-box}
@@ -40,7 +40,7 @@ pre{white-space:pre-wrap;font-size:12px;max-height:60vh;overflow:auto;background
 </head>
 <body>
 <header>
-  <h1>PS4 Mount <small id="ver"></small></h1>
+  <h1>PS4Mount <small id="ver"></small></h1>
   <div class="bar">
     <input id="q" type="search" placeholder="Search game or CUSA">
     <button id="rescan" class="primary">Scan for games</button>
@@ -115,7 +115,7 @@ $('q').addEventListener('input', render);
 $('rescan').onclick = function () { api('/api/rescan', 'POST').then(function (j) { toast(j.message); setTimeout(load, 3000); }); };
 $('logbtn').onclick = function () { api('/api/log').then(function (j) { $('log').textContent = j.log; $('logdlg').showModal(); }); };
 $('stop').onclick = function () {
-  if (!confirm('Stop PS4 Mount? The games stay unavailable until it is loaded again.')) return;
+  if (!confirm('Stop PS4Mount? The games stay unavailable until it is loaded again.')) return;
   api('/api/stop', 'POST').then(function (j) { toast(j.message); });
 };
 load();
