@@ -1033,7 +1033,8 @@ static void start_delete_window(void) {
 /* Copies klog lines about our titles (and crash/mount errors) into the log. */
 static void trace_klog(const char *line) {
     static const char *keys[] = {"CRASH", "Trophy:Register", "_pfs_mount", "mountpfs", "PrepareProcessLaunch",
-                                 "preLaunchCheck", "scePlayGoCore", "process_mount", "process_check", NULL};
+                                 "preLaunchCheck", "scePlayGoCore", "process_mount", "process_check", "sqlite",
+                                 "SQLITE", "corrupt", "Corrupt", "CORRUPT", "dbr", "DBR", NULL};
     for (int i = 0; keys[i]; i++)
         if (strstr(line, keys[i])) {
             printf("[klog] %.300s\n", line);

@@ -5,26 +5,67 @@
  * with its own cache, and rows written from outside make it flag them as corrupted. */
 #include "db.h"
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
 #include "sqlite3.h"
 
 #ifndef APP_DB
 #define APP_DB "/system_data/priv/mms/app.db"
 #endif
 
-int db_is_registered(const char *title_id) {
-    sqlite3 *db;
-    if (sqlite3_open_v2(APP_DB, &db, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK) {
+/* Titles registered in app.db, read in one query at most once a second. The file is
+ * opened without locks (nolock=1): a shared lock held here, even for a moment, can make
+ * a write of ShellCore fail, and ShellCore then flags the database as corrupted. */
+static char (*g_titles)[10];
+static int g_ntitles, g_cap;
+static time_t g_read_at;
+static int g_read_ok;
+
+static void refresh(void) {
+    if (g_read_ok && time(NULL) == g_read_at)
+        return;
+    g_read_at = time(NULL);
+    sqlite3 *db = NULL;
+    if (sqlite3_open_v2("file:" APP_DB "?mode=ro&nolock=1", &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, NULL) !=
+        SQLITE_OK) {
         sqlite3_close(db);
-        return 0;
+        return; /* keep the last list */
     }
-    sqlite3_busy_timeout(db, 5000);
     sqlite3_stmt *st;
-    int found = 0;
-    if (sqlite3_prepare_v2(db, "SELECT 1 FROM tbl_contentinfo WHERE titleId=?", -1, &st, NULL) == SQLITE_OK) {
-        sqlite3_bind_text(st, 1, title_id, -1, SQLITE_STATIC);
-        found = sqlite3_step(st) == SQLITE_ROW;
+    int n = 0, ok = 0;
+    if (sqlite3_prepare_v2(db, "SELECT titleId FROM tbl_contentinfo", -1, &st, NULL) == SQLITE_OK) {
+        int rc;
+        while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+            const char *t = (const char *)sqlite3_column_text(st, 0);
+            if (!t)
+                continue;
+            if (n == g_cap) {
+                int cap = g_cap ? g_cap * 2 : 256;
+                char (*grown)[10] = realloc(g_titles, sizeof(*grown) * (size_t)cap);
+                if (!grown)
+                    break;
+                g_titles = grown;
+                g_cap = cap;
+            }
+            snprintf(g_titles[n++], 10, "%s", t);
+        }
+        ok = rc == SQLITE_DONE;
         sqlite3_finalize(st);
     }
     sqlite3_close(db);
-    return found;
+    if (ok) { /* a read that met a write in progress keeps the last list */
+        g_ntitles = n;
+        g_read_ok = 1;
+    }
+}
+
+int db_is_registered(const char *title_id) {
+    refresh();
+    for (int i = 0; i < g_ntitles; i++)
+        if (!strcmp(g_titles[i], title_id))
+            return 1;
+    return 0;
 }
