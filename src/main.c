@@ -426,6 +426,7 @@ static managed_t g_managed[MAX_TITLES];
 static int g_manual_scan; /* "Scan for games" in the panel */
 static int g_deleting; /* a delete screen is open: game folders are unmounted */
 static time_t g_deleting_since;
+static time_t g_deleting_close_at; /* set when the uninstall finished */
 
 static managed_t *managed_by(const char *tid, const char *cid) {
     for (int i = 0; i < MAX_TITLES; i++)
@@ -920,6 +921,7 @@ static const char *after(const char *line, const char *tag) {
 
 static void end_delete_window(void) {
     g_deleting = 0;
+    g_deleting_close_at = 0;
     for (int i = 0; i < MAX_TITLES; i++)
         if (g_managed[i].used)
             mount_paths(g_managed[i].tid, g_managed[i].has_patch);
@@ -946,6 +948,7 @@ static int delete_scene(const char *name) {
 
 static void start_delete_window(void) {
     g_deleting_since = time(NULL);
+    g_deleting_close_at = 0;
     if (g_deleting)
         return;
     g_deleting = 1;
@@ -983,6 +986,8 @@ static void handle_klog_line(const char *line) {
     if ((p = after(line, "OnFocusActiveSceneChanged ["))) {
         /* "[from : type] -> [to : type]": follow the delete screens */
         const char *to = strstr(p, "] -> [");
+        if (g_deleting)
+            printf("[delete] screen %.200s\n", p);
         if (to) {
             to += 6;
             int kind = delete_scene(to);
@@ -1026,6 +1031,9 @@ static void handle_klog_line(const char *line) {
             notify("%s removed from the library. The pkg stays on the USB drive.", m->name);
             m->used = 0;
         }
+        /* the delete is done: mount the other games again shortly after */
+        if (g_deleting)
+            g_deleting_close_at = time(NULL) + 3;
     }
 }
 
@@ -1361,6 +1369,8 @@ int main(void) {
             notify(VERSION " stopped");
             return 0;
         }
+        if (g_deleting && g_deleting_close_at && time(NULL) >= g_deleting_close_at)
+            end_delete_window();
         if (g_deleting && time(NULL) - g_deleting_since > 600)
             end_delete_window(); /* the line of the screen change was missed */
         if (time(NULL) >= g_next_scan && !g_deleting) {
