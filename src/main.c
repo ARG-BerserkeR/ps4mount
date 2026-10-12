@@ -1087,20 +1087,27 @@ static int find_dlc_game(const char *root, const pkg_t *dlc, char *tid) {
     return found ? 0 : -1;
 }
 
+/* Add-ons left in place during one adoption run, reported in one notification. */
+static int g_dlc_orphans, g_dlc_dupes;
+
 /* Moves an add-on pkg (ac) into <root>/ps4/<GAME>/addcont/<ADD-ON TID>/<LABEL>/ac.pkg. */
 static int adopt_dlc(const char *root, const char *name, const char *path, pkg_t *pkg) {
     char game[10], dst[PATH_MAX];
     if (find_dlc_game(root, pkg, game)) {
-        if (first_time(path))
-            notify("%s: no game for this add-on (%s) on the drive; it was left in the root", name, pkg->content_id);
+        if (first_time(path)) {
+            printf("[scan] %s: no game for add-on %s on the drive, left in place\n", name, pkg->content_id);
+            g_dlc_orphans++;
+        }
         return 0;
     }
     snprintf(dst, sizeof(dst), "%s/ps4/%s/addcont/%s/%s", root, game, pkg->title_id, pkg->content_id + 20);
     mkdirs(dst, 0777);
     snprintf(dst, sizeof(dst), "%s/ps4/%s/addcont/%s/%s/ac.pkg", root, game, pkg->title_id, pkg->content_id + 20);
     if (exists(dst)) {
-        if (first_time(path))
-            notify("%s: %s already has this add-on; the copy was left in the root", name, game);
+        if (first_time(path)) {
+            printf("[scan] %s: %s already has this add-on, the copy was left in place\n", name, game);
+            g_dlc_dupes++;
+        }
         return 0;
     }
     if (rename(path, dst)) {
@@ -1298,10 +1305,16 @@ static int has_candidates(const char *root) {
 static int adopt_root_pkgs(const char *root) {
     char dir[PATH_MAX];
     int moved = 0;
+    g_dlc_orphans = g_dlc_dupes = 0;
     for (int i = 0; i < g_cfg.npaths; i++) {
         scan_dir(dir, sizeof(dir), root, i);
         moved += adopt_dir_pkgs(root, dir);
     }
+    if (g_dlc_orphans)
+        notify("%s: %d add-on(s) were left in place because their game is not on this drive (see the log)",
+               root + 5, g_dlc_orphans);
+    if (g_dlc_dupes)
+        notify("%s: %d add-on copy(ies) were left in place because the game already has them", root + 5, g_dlc_dupes);
     return moved;
 }
 
