@@ -133,6 +133,30 @@ static int mounted_from(const char *mountpoint, char *from, size_t n) {
     return 1;
 }
 
+/* Mounts on path from the mount table. Unlike statfs(path) this also sees a layer
+ * whose source drive was disconnected (statfs on it fails). */
+static int layers_on(const char *path) {
+    int n = getfsstat(NULL, 0, MNT_NOWAIT), count = 0;
+    if (n <= 0)
+        return 0;
+    struct statfs *list = malloc(sizeof(*list) * (size_t)(n + 16));
+    if (!list)
+        return 0;
+    n = getfsstat(list, (long)(sizeof(*list) * (size_t)(n + 16)), MNT_NOWAIT);
+    for (int i = 0; i < n; i++)
+        if (!strcmp(list[i].f_mntonname, path))
+            count++;
+    free(list);
+    return count;
+}
+
+/* A layer is on path but cannot be read: its drive was disconnected (and maybe
+ * connected again, which gives it a new mount). */
+static int dead_layer(const char *path) {
+    struct statfs sf;
+    return statfs(path, &sf) && layers_on(path) > 0;
+}
+
 static int is_mountpoint(const char *path) {
     struct statfs sf;
     return statfs(path, &sf) == 0 && !strcmp(sf.f_mntonname, path);
@@ -709,8 +733,14 @@ static int title_running(const char *tid) {
     return 0;
 }
 
+static void unmount_all_layers(const char *target, int force);
+
 static int mount_dir(const char *dir, const char *target) {
     mkdir(target, 0777);
+    if (dead_layer(target)) {
+        printf("[mount] %s: removing a layer of a disconnected drive\n", target);
+        unmount_all_layers(target, 1);
+    }
     int top = top_layer(target, dir);
     if (top == 1)
         return 0;
@@ -725,7 +755,7 @@ static int mount_dir(const char *dir, const char *target) {
 }
 
 static void unmount_all_layers(const char *target, int force) {
-    for (int i = 0; i < 8 && mounted_from(target, NULL, 0); i++)
+    for (int i = 0; i < 8 && (mounted_from(target, NULL, 0) || layers_on(target) > 0); i++)
         if (unmount(target, force ? MNT_FORCE : 0)) {
             printf("[mount] unmount %s: %s\n", target, strerror(errno));
             if (!force)
