@@ -80,6 +80,7 @@ the same network. The panel shows every game found on the connected drives, with
 | Not in library | Removed from the library; the `.pkg` is still on the drive |
 | Adding | Being added to the library |
 | Installed on console | A normal installation of this game exists; PS4Mount leaves it alone |
+| On another drive | The same game is also on another connected drive, which is the one used |
 
 Buttons:
 

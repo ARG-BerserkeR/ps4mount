@@ -568,10 +568,35 @@ static int marker_matches(const char *tid, const char *expected) {
 }
 
 /* 1 = needs (re)registration, 0 = registered here, -1 = skip. */
+/* The title is served from another connected drive: the marker names another
+ * folder whose game pkg is still there. The first drive keeps it, so the same game
+ * on two drives is not switched (and registered again) on every scan. */
+static int served_elsewhere(const title_src_t *t) {
+    char path[64], buf[PATH_MAX + 256] = {0}, pkg[PATH_MAX + 16];
+    snprintf(path, sizeof(path), STATE_DIR "/%s.src", t->app.title_id);
+    int fd = open(path, O_RDONLY);
+    if (fd < 0)
+        return 0;
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0)
+        return 0;
+    buf[strcspn(buf, "\n")] = 0;
+    if (!strcmp(buf, t->dir))
+        return 0;
+    snprintf(pkg, sizeof(pkg), "%s/app.pkg", buf);
+    return exists(pkg);
+}
+
 static int title_state(title_src_t *t) {
     const char *tid = t->app.title_id;
     if (installed_internally(tid) || removed(tid))
         return -1;
+    if (served_elsewhere(t)) {
+        if (first_time(t->app_path))
+            printf("[scan] %s: %s is already served from another drive, this copy is not used\n", t->dir, tid);
+        return -1;
+    }
     char pdb[PATH_MAX];
     snprintf(pdb, sizeof(pdb), "/user/playgo/app/%s/00/d0.pdb", t->app.content_id);
     /* folders set up by 0.3.1 and older lack the internal folder: registered again */
@@ -1156,6 +1181,8 @@ void app_games_json(buf_t *out) {
             managed_t *m = managed_by(tid, NULL);
             if (installed_internally(tid))
                 state = "internal";
+            else if (served_elsewhere(&t))
+                state = "duplicate";
             else if (removed(tid))
                 state = "removed";
             else if (m && m->running)
