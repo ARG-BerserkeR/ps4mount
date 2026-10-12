@@ -105,11 +105,6 @@ static int write_file(const char *path, const void *data, size_t len, mode_t mod
     return 0;
 }
 
-static int64_t file_mtime(const char *path) {
-    struct stat st;
-    return stat(path, &st) ? 0 : (int64_t)st.st_mtime;
-}
-
 static int mounted_from(const char *mountpoint, char *from, size_t n) {
     struct statfs sf;
     if (statfs(mountpoint, &sf) || strcmp(sf.f_mntonname, mountpoint) || strcmp(sf.f_fstypename, "nullfs"))
@@ -621,20 +616,17 @@ static int register_title(title_src_t *t) {
     if (!db_is_registered(tid)) {
         int rc = sceAppInstUtilAppInstallAll(NULL);
         /* the icon shows up before the rows land: keep serving klog/panel meanwhile */
-        for (int i = 0; i < 15 && !db_is_registered(tid); i++)
+        for (int i = 0; i < 30 && !db_is_registered(tid); i++)
             pump_events(1000);
         printf("[reg] %s: AppInstallAll=0x%08x registered=%d\n", tid, rc, db_is_registered(tid));
     }
-    /* Fallback, and updates: rows carry version/size of the patch (INSERT OR REPLACE). */
-    if (!db_is_registered(tid) || !marker_matches(tid, t->marker)) {
-        char icon[64], pic[64];
-        snprintf(icon, sizeof(icon), "/user/appmeta/%s/icon0.png", tid);
-        snprintf(pic, sizeof(pic), "/user/appmeta/%s/pic0.dds", tid);
-        db_title_t d = {&t->app, t->has_patch ? &t->patch_sfo : &t->app_sfo, t->name,
-                        t->app.pkg_size + (t->has_patch ? t->patch.pkg_size : 0), file_mtime(icon), file_mtime(pic),
-                        (uint64_t)kernel_get_fw_version() << 32 | 1};
-        if (db_register(&d))
-            return -1;
+    /* The system databases are only ever written by the system: ShellCore keeps them
+     * open with its own cache, and rows written from outside make it flag app.db as
+     * corrupted (and rebuild it at the next boot). A title the system did not
+     * register is tried again on the next scan. */
+    if (!db_is_registered(tid)) {
+        printf("[reg] %s: not registered by the system yet, retried on the next scan\n", tid);
+        return -1;
     }
     enforce_patch_sfo(t);
     char marker[64];

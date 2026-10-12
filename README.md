@@ -105,8 +105,8 @@ To delete the game for good, delete its `/ps4/CUSAxxxxx` folder from the drive o
 - Load PS4Mount soon after every boot. While it is not running, the console does not see the
   packages and may hide the games; they come back as soon as PS4Mount runs again.
 - Do not unplug the drive while a game is running.
-- When a game with an update is added, the PS5's own "installed" notification may show the base
-  version (for example 01.00). The game runs with the update; the library shows the right version.
+- For a game with an update, the library and the PS5's own "installed" notification show the version
+  of the game pkg (for example 01.00). The game runs with the update; the web panel shows its version.
 - Games already installed the normal way on the console are never touched.
 - If a game fails to start right after being added, start it again. The log (panel > **Log**) shows
   what happened.
@@ -144,8 +144,7 @@ plus some metadata. PS4Mount skips the copy:
    symbolic links to the packages on the drive. That folder is mounted over `/user/app/<TITLE_ID>`
    (and `/user/patch/<TITLE_ID>`) with `nullfs`. The drive itself is never mounted there.
 3. It asks the system to register the title (`sceAppInstUtilAppInstallAll`), which adds it to the
-   library and refreshes the home screen. When an update is present it also writes the library rows
-   with the update's version.
+   library and refreshes the home screen. PS4Mount never writes to the system databases itself.
 4. A delete from the console can only remove the links, never the packages. While a delete screen
    is open (on the home screen or in Settings > Storage) PS4Mount also unmounts the game folders,
    so the system can remove `/user/app/<TITLE_ID>` without an error.
