@@ -136,6 +136,23 @@ python3 tools/make_icon.py                                 # redraws assets/icon
 python3 tools/gen_keys.py <LibOrbisPkg>/LibOrbisPkg/Util/Keys.cs   # regenerates src/keys.h
 ```
 
+### Releases
+
+GitHub Actions (`.github/workflows/build.yml`) builds every push and pull request with the PS5
+Payload SDK release set in `SDK_VERSION`, and keeps `ps4mount.elf` as a build artifact.
+
+To publish a release:
+
+1. Set the new version in `src/main.c` (`#define VERSION "PS4 Mount X.Y.Z"`) and commit it.
+2. Tag the commit and push the tag:
+   ```sh
+   git tag vX.Y.Z
+   git push origin vX.Y.Z
+   ```
+
+The workflow checks that the tag matches `VERSION`, builds the payload and creates the GitHub
+release with `ps4mount.elf` and its SHA-256 checksum attached.
+
 | Path | Content |
 | --- | --- |
 | `src/main.c` | Daemon: drive scan, registration, mounts, klog events, panel actions |
