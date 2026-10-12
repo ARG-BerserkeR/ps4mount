@@ -37,7 +37,7 @@
 #include "web.h"
 #include "icon_data.h"
 
-#define VERSION "PS4 Mount 0.2.0"
+#define VERSION "PS4 Mount 0.3.0"
 #define LOCK_PORT 9032
 #define SCAN_SECONDS 10
 #define STATE_DIR "/data/ps4mount"
@@ -381,6 +381,7 @@ out:
  * uninstall then cannot touch it) except while the game is starting/running. */
 typedef struct {
     int used, has_patch, rw, running;
+    time_t running_since; /* launch seen in klog; the sandbox mount appears shortly after */
     time_t rw_until; /* selected on the home screen: back to read-only after this */
     char tid[10], cid[37], name[128], dir[PATH_MAX];
 } managed_t;
@@ -417,6 +418,25 @@ static int nullfs_mount(const char *dir, const char *target, int rw) {
 
 /* One layer per path: switching read-only <-> read-write is unmount + mount
  * (this nullfs supports neither MNT_UPDATE nor a writable layer on top). */
+/* A running PS4 title keeps /mnt/sandbox/pfsmnt/<TID>-app0 mounted. Unlike the klog
+ * events this survives a restart of the daemon, so it is the reference for "running". */
+static int title_running(const char *tid) {
+    char want[64];
+    snprintf(want, sizeof(want), "/mnt/sandbox/pfsmnt/%s-app0", tid);
+    int n = getfsstat(NULL, 0, MNT_NOWAIT);
+    if (n <= 0)
+        return 0;
+    struct statfs *list = malloc(sizeof(*list) * (size_t)(n + 16));
+    if (!list)
+        return 0;
+    n = getfsstat(list, (long)(sizeof(*list) * (size_t)(n + 16)), MNT_NOWAIT);
+    int found = 0;
+    for (int i = 0; i < n && !found; i++)
+        found = !strcmp(list[i].f_mntonname, want);
+    free(list);
+    return found;
+}
+
 static int mount_dir(const char *dir, const char *target, int rw) {
     mkdir(target, 0777);
     int top = top_layer(target, dir);
@@ -472,10 +492,16 @@ static void manage(const title_src_t *t) {
             m = &g_managed[i];
     if (!m)
         return;
-    int rw = m->used ? m->rw : 0;
+    /* keep the runtime state across rescans */
+    managed_t keep = *m;
     memset(m, 0, sizeof(*m));
     m->used = 1;
-    m->rw = rw;
+    if (keep.used) {
+        m->rw = keep.rw;
+        m->running = keep.running;
+        m->running_since = keep.running_since;
+        m->rw_until = keep.rw_until;
+    }
     m->has_patch = t->has_patch;
     snprintf(m->tid, sizeof(m->tid), "%s", t->app.title_id);
     snprintf(m->cid, sizeof(m->cid), "%s", t->app.content_id);
@@ -742,6 +768,19 @@ static void scan_root(const char *root, int fresh, int reconnected) {
             enforce_patch_sfo(&src);
             manage(&src);
             managed_t *m = managed_by(t->tid, NULL);
+            int running = title_running(t->tid);
+            if (m && running && !m->running) {
+                /* open before this daemon started (restart or crash): keep it writable */
+                printf("[scan] %s is running, keeping it read-write\n", t->tid);
+                m->running = 1;
+                m->rw = 1;
+                m->rw_until = 0;
+            } else if (m && !running && m->running && time(NULL) - m->running_since > 60) {
+                /* closed without a klog end event: back to read-only */
+                printf("[scan] %s is no longer running\n", t->tid);
+                m->running = 0;
+                m->rw = 0;
+            }
             if (mount_title(&src, m ? m->rw : 0))
                 notify("Failed to mount %s (%s)", src.name, t->tid);
         } else {
@@ -871,6 +910,7 @@ static void handle_klog_line(const char *line) {
         managed_t *m = managed_by(id, NULL);
         if (m && !g_deleting) {
             m->running = 1;
+            m->running_since = time(NULL);
             m->rw_until = 0;
             if (!m->rw || top_layer_rw(m) != 1)
                 set_rw(m, 1);
@@ -881,15 +921,26 @@ static void handle_klog_line(const char *line) {
         if (m) {
             m->running = 0;
             m->rw_until = 0;
-            set_rw(m, 0);
+            if (g_deleting) {
+                /* closed by a delete: take the folder away before the uninstall runs */
+                unmount_title(m->tid);
+                printf("[delete] %s closed, USB folder unmounted\n", m->tid);
+            } else {
+                set_rw(m, 0);
+            }
         }
     } else if (strstr(line, "-> [AppDeleteConfirmScene")) {
         /* Delete dialog: take the USB folders away so the uninstall only removes the entry. */
         g_deleting = 1;
         g_deleting_since = time(NULL);
-        for (int i = 0; i < MAX_TITLES; i++)
-            if (g_managed[i].used)
-                unmount_title(g_managed[i].tid);
+        for (int i = 0; i < MAX_TITLES; i++) {
+            managed_t *m = &g_managed[i];
+            if (!m->used)
+                continue;
+            if (m->running || title_running(m->tid))
+                continue; /* still open: unmounted when it closes (see the End event) */
+            unmount_title(m->tid);
+        }
         printf("[delete] dialog open, USB folders unmounted\n");
     } else if ((p = after(line, "[PlayGoCore][Uninstall] end ("))) {
         snprintf(id, sizeof(id), "%.36s", p);
@@ -1055,7 +1106,7 @@ int app_add(const char *tid, char *msg, size_t cap) {
 
 int app_remove(const char *tid, char *msg, size_t cap) {
     managed_t *m = managed_by(tid, NULL);
-    if (m && m->running) {
+    if ((m && m->running) || title_running(tid)) {
         printf("[web] remove %s refused: game running\n", tid);
         snprintf(msg, cap, "Close the game before removing it");
         return -1;
