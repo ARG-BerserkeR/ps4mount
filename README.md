@@ -24,6 +24,8 @@ The web panel, opened from the **Media** tab:
 - Detects PS4 fake PKGs (game and update) in the root of any connected USB drive.
 - Adds the games to the home screen with their icon, name and update version.
 - Applies updates: put the update `.pkg` next to the game and it is picked up automatically.
+- Installs add-ons (DLC), with data or unlock-only. An add-on is matched to its game by title ID, or by
+  the add-on IDs the game lists (so add-ons of another region of the same game work too).
 - Games run from the drive; no internal storage is used for the packages.
 - Deleting a game from the PS5 removes it from the library only. The `.pkg` is never deleted.
 - Notifications while scanning (how many games were found on each drive) and for added and removed
@@ -40,15 +42,15 @@ The web panel, opened from the **Media** tab:
   `/dev/klog`. PS4Mount reads the system log to know when a game starts and when a delete is
   confirmed. Without it, games cannot start (see [How it works](#how-it-works)).
 - A USB drive formatted as **exFAT**.
-- PS4 **fake** PKGs (game, and optionally its update). Retail PKGs and DLC are not supported.
+- PS4 **fake** PKGs (game, and optionally its update and add-ons). Retail PKGs are not supported.
 
 ## Usage
 
 Download `ps4mount.elf` from the [Releases](https://github.com/gasb07/ps4mount/releases) page
 (or [build it](#building)).
 
-1. Copy the PS4 game `.pkg` (and its update `.pkg`, if you have one) to the **root** of the USB drive.
-   The file names do not matter.
+1. Copy the PS4 game `.pkg` (and its update and add-on `.pkg` files, if you have them) to the **root**
+   of the USB drive. The file names do not matter.
 2. Plug the drive into the PS5.
 3. Send `ps4mount.elf` to the ELF loader (port 9021). Do this after every console boot, or add it to
    the payloads your jailbreak loads automatically.
@@ -62,9 +64,13 @@ Download `ps4mount.elf` from the [Releases](https://github.com/gasb07/ps4mount/r
 On the first run PS4Mount moves every package it uses into a folder per game on the same drive:
 
 ```
-/ps4/CUSAxxxxx/app.pkg      game
-/ps4/CUSAxxxxx/patch.pkg    update (optional)
+/ps4/CUSAxxxxx/app.pkg                          game
+/ps4/CUSAxxxxx/patch.pkg                        update (optional)
+/ps4/CUSAxxxxx/addcont/CUSAyyyyy/<LABEL>/ac.pkg add-on (optional)
 ```
+
+A game is reported as ready only after its add-ons are installed too. An add-on whose game is not on the
+same drive stays in the root, with a notification.
 
 Keep this layout. To add more games later, copy their `.pkg` files to the root of the drive again.
 

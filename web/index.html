@@ -84,7 +84,8 @@ function render() {
     html += '<div class="card"><div class="art" style="background-image:url(/icon/' + g.title_id + ')">' +
       '<span class="badge b-' + g.state + '">' + esc(labels[g.state] || g.state) + '</span></div>' +
       '<div class="info"><div class="name">' + esc(g.name) + '</div>' +
-      '<div class="meta">' + g.title_id + ' · v' + esc(g.version) + (g.has_patch ? ' (with update)' : '') + ' · ' + gb(g.size) + '</div>' +
+      '<div class="meta">' + g.title_id + ' · v' + esc(g.version) + (g.has_patch ? ' (with update)' : '') +
+        (g.dlc ? ' · ' + g.dlc + ' add-on' + (g.dlc > 1 ? 's' : '') : '') + ' · ' + gb(g.size) + '</div>' +
       '<div class="meta">' + esc(g.source) + (g.mount ? ' · mounted ' + g.mount : '') + '</div>' +
       (g.update_issue ? '<div class="warn">' + esc(g.update_issue) + '</div>' : '') + '</div>' +
       '<div class="actions">' + act + '</div></div>';

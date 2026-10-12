@@ -84,7 +84,7 @@ static void put_sha_trailer(buf_t *out) {
     buf_put(out, h, 32);
 }
 
-void build_app_pbm(buf_t *out, const pkg_t *pkg, const char *app_ver, int is_patch) {
+void build_app_pbm(buf_t *out, const pkg_t *pkg, const char *app_ver, int type) {
     uint64_t nblk = (pkg->pkg_size + BLK - 1) / BLK;
     uint8_t hdr[0x100] = {0};
     memcpy(hdr, "pdbm", 4);
@@ -92,7 +92,7 @@ void build_app_pbm(buf_t *out, const pkg_t *pkg, const char *app_ver, int is_pat
     memcpy(hdr + 0x0e, app_ver, strnlen(app_ver, 5));
     put_le32(hdr + 0x14, 0x990);
     put_le32(hdr + 0x18, 0x10000);
-    put_le32(hdr + 0x1e, is_patch ? 0x31 : 0x11);
+    put_le32(hdr + 0x1e, (uint32_t)type);
     put_le64(hdr + 0x22, nblk);
     memcpy(hdr + 0x60, pkg->digest, 32);
     put_le32(hdr + 0xa0, 1);
@@ -295,19 +295,64 @@ int build_patch_pdb(buf_t *out, const patch_ref_t *patch) {
     return 0;
 }
 
-void build_license(buf_t *rif, buf_t *idx, const pkg_t *pkg, const uint8_t *license_dat) {
-    uint8_t head[0x400] = {0};
-    memcpy(head, "rifa", 4);
-    memcpy(head + 4, pkg->content_id, 19);
-    buf_put(rif, head, sizeof(head));
-    buf_put(rif, license_dat, 0x400);
+void build_ac_pdb(buf_t *out, const pkg_t *pkg, const char *url, const buf_t *ac_json) {
+    uint8_t size[8];
+    put_le64(size, pkg->pkg_size);
+    char ref[64];
+    snprintf(ref, sizeof(ref), "0000000000000000-%.36s", pkg->content_id);
+    pdb_override_t ov[] = {
+        {0xf4241, pkg->content_id, 36},
+        {0xf42a6, url, (uint32_t)strlen(url)}, {0xf42a7, ac_json->data, (uint32_t)ac_json->len},
+        {0xf4246, size, 8}, {0xf4247, size, 8}, {0xf4248, size, 8}, {0xf4249, size, 8},
+        {0xf431b, ref, (uint32_t)strlen(ref)},
+    };
+    pdb_from_template(out, k_pdb_addcont_template, sizeof(k_pdb_addcont_template), ov, (int)(sizeof(ov) / sizeof(ov[0])));
+}
 
-    uint8_t x[0x50] = {0};
-    memcpy(x, "ridx\x01\x00\x00\x00\x01", 9);
-    memcpy(x + 9, pkg->content_id, 19);
-    memcpy(x + 0x20, pkg->content_id + 20, 16);
-    x[0x31] = 4;
-    x[0x39] = 4;
-    x[0x40] = 1;
+/* One rif/idx pair per content id prefix (UP9000-CUSA00000_00): a 0x400 header,
+ * then one 0x400 license slot per content (the game and its add-ons), each
+ * listed in the idx by the label after the prefix. */
+#define RIF_SLOT 0x400
+#define IDX_HEAD 0x20
+#define IDX_ENTRY 0x30
+
+void build_license(buf_t *rif, buf_t *idx, const uint8_t *old_rif, size_t rif_len, const uint8_t *old_idx,
+                   size_t idx_len, const char *content_id, const uint8_t *license_dat) {
+    const char *label = content_id + 20;
+    uint32_t count = 0, slot = 0;
+    int valid = old_rif && old_idx && rif_len >= RIF_SLOT && idx_len >= IDX_HEAD && !memcmp(old_rif, "rifa", 4) &&
+                !memcmp(old_idx, "ridx", 4) && !memcmp(old_rif + 4, content_id, 19);
+    if (valid) {
+        count = le32(old_idx + 4);
+        if (idx_len < IDX_HEAD + (size_t)count * IDX_ENTRY || rif_len < RIF_SLOT * (size_t)(count + 1))
+            valid = 0;
+    }
+    if (!valid)
+        count = 0;
+    for (slot = 0; slot < count; slot++)
+        if (!memcmp(old_idx + IDX_HEAD + slot * IDX_ENTRY, label, 16))
+            break;
+    uint32_t total = slot == count ? count + 1 : count;
+
+    uint8_t head[RIF_SLOT] = {0};
+    memcpy(head, "rifa", 4);
+    memcpy(head + 4, content_id, 19);
+    buf_put(rif, head, sizeof(head));
+    for (uint32_t i = 0; i < total; i++)
+        buf_put(rif, i == slot ? license_dat : old_rif + RIF_SLOT * (i + 1), RIF_SLOT);
+
+    uint8_t x[IDX_HEAD] = {0};
+    memcpy(x, "ridx", 4);
+    put_le32(x + 4, total);
+    x[8] = 1;
+    memcpy(x + 9, content_id, 19);
     buf_put(idx, x, sizeof(x));
+    for (uint32_t i = 0; i < total; i++) {
+        uint8_t e[IDX_ENTRY] = {0};
+        memcpy(e, i == slot ? (const uint8_t *)label : old_idx + IDX_HEAD + i * IDX_ENTRY, 16);
+        put_le64(e + 0x10, (uint64_t)RIF_SLOT * (i + 1));
+        put_le64(e + 0x18, RIF_SLOT);
+        e[0x20] = 1;
+        buf_put(idx, e, sizeof(e));
+    }
 }

@@ -11,6 +11,7 @@ mkdir -p build
 {
     (cd tools && xxd -i -n k_pdb_template pdb_app_template.bin)
     (cd tools && xxd -i -n k_pdb_patch_template pdb_patch_template.bin)
+    (cd tools && xxd -i -n k_pdb_addcont_template pdb_addcont_template.bin)
 } > build/pdb_template.h
 [ -f build/sqlite3.o ] || $B/prospero-clang -O2 -w -c third_party/sqlite/sqlite3.c -o build/sqlite3.o \
     -DSQLITE_THREADSAFE=0 -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DEFAULT_MEMSTATUS=0
