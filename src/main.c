@@ -387,6 +387,7 @@ typedef struct {
 } managed_t;
 
 static managed_t g_managed[MAX_TITLES];
+static int g_manual_scan; /* "Scan for games" in the panel */
 static int g_deleting; /* a delete dialog is open: USB folders are unmounted */
 static time_t g_deleting_since;
 
@@ -641,10 +642,11 @@ static int first_time(const char *path) {
 
 /* Moves PS4 game (gd) and update (gp) pkgs from the storage root into
  * <root>/ps4/<TID>/app.pkg and patch.pkg. */
-static void adopt_root_pkgs(const char *root) {
+static int adopt_root_pkgs(const char *root) {
+    int moved = 0;
     DIR *d = opendir(root);
     if (!d)
-        return;
+        return 0;
     struct dirent *e;
     char path[PATH_MAX], dst[PATH_MAX];
     while ((e = readdir(d))) {
@@ -706,12 +708,15 @@ static void adopt_root_pkgs(const char *root) {
             }
             notify("New update for %s (v%s): the previous one was moved to ps4/%s/replaced", tid, ver, tid);
         }
-        if (rename(path, dst))
+        if (rename(path, dst)) {
             printf("[scan] move %s: %s\n", path, strerror(errno));
-        else
+        } else {
             printf("[scan] moved %s -> %s\n", path, dst);
+            moved++;
+        }
     }
     closedir(d);
+    return moved;
 }
 
 typedef struct {
@@ -720,12 +725,20 @@ typedef struct {
 } title_t;
 
 static void scan_root(const char *root, int fresh, int reconnected) {
-    adopt_root_pkgs(root);
+    const char *label = root + 5; /* "usb0" / "ext0" */
+    if (fresh)
+        notify("Scanning %s for PS4 games...", label);
+    int moved = adopt_root_pkgs(root);
+    if (moved && !fresh)
+        notify("%s: %d new package(s) found", label, moved);
     char lib[PATH_MAX];
     snprintf(lib, sizeof(lib), "%s/ps4", root);
     DIR *d = opendir(lib);
-    if (!d)
+    if (!d) {
+        if (fresh)
+            notify("%s: no PS4 games found", label);
         return;
+    }
     static title_t titles[MAX_TITLES];
     int count = 0, pending = 0;
     struct dirent *e;
@@ -751,8 +764,9 @@ static void scan_root(const char *root, int fresh, int reconnected) {
         src_close(&src);
     }
     closedir(d);
-    const char *label = root + 5; /* "usb0" / "ext0" */
-    if (fresh && count)
+    if (fresh && !count)
+        notify("%s: no PS4 games found", label);
+    else if (fresh)
         notify("%s: %d PS4 game(s) found, %d new or updated", label, count, pending);
     else if (pending)
         notify("%s: %d new or updated PS4 game(s)", label, pending);
@@ -839,10 +853,11 @@ static void scan_all(void) {
             snprintf(root, sizeof(root), "/mnt/ext%d", i - 8);
         int present = is_mountpoint(root);
         if (present)
-            scan_root(root, !seen[i], !seen[i] && !first);
+            scan_root(root, !seen[i] || g_manual_scan, !seen[i] && !first);
         seen[i] = present;
     }
     first = 0;
+    g_manual_scan = 0;
 }
 
 /* --- klog events --- */
@@ -967,7 +982,10 @@ static void handle_klog_line(const char *line) {
 static time_t g_next_scan;
 static int g_stop;
 
-void app_rescan(void) { g_next_scan = 0; }
+void app_rescan(void) {
+    g_next_scan = 0;
+    g_manual_scan = 1;
+}
 void app_stop(void) { g_stop = 1; }
 
 static void json_str(buf_t *b, const char *s) {

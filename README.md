@@ -9,6 +9,16 @@ it from the library: the `.pkg` stays on the drive.
 
 ![PS4Mount icon](assets/icon0.png)
 
+## Screenshots
+
+Notifications on the home screen while PS4Mount scans the USB drives:
+
+![Scan notifications on the PS5 home screen](docs/notifications.png)
+
+The web panel, opened from the **Media** tab:
+
+![PS4Mount web panel](docs/web-panel.png)
+
 ## Features
 
 - Detects PS4 fake PKGs (game and update) in the root of any connected USB drive.
@@ -16,7 +26,8 @@ it from the library: the `.pkg` stays on the drive.
 - Applies updates: put the update `.pkg` next to the game and it is picked up automatically.
 - Games run from the drive; no internal storage is used for the packages.
 - Deleting a game from the PS5 removes it from the library only. The `.pkg` is never deleted.
-- Notifications for found, added and removed games.
+- Notifications while scanning (how many games were found on each drive) and for added and removed
+  games.
 - A web panel, also available as **PS4Mount** in the **Media** tab, to see the games and add or
   remove them from the library.
 
@@ -42,6 +53,7 @@ Download `ps4mount.elf` from the [Releases](https://github.com/gasb07/ps4mount/r
 3. Send `ps4mount.elf` to the ELF loader (port 9021). Do this after every console boot, or add it to
    the payloads your jailbreak loads automatically.
 4. Wait for the notifications:
+   - `Scanning usb0 for PS4 games...`
    - `usb0: 2 PS4 game(s) found, 2 new or updated`
    - `Adding 1/2: <game name> (CUSAxxxxx)`
    - `<game name> ready to play`
@@ -73,7 +85,7 @@ Buttons:
 
 - **Remove from library**: removes the game from the home screen. The `.pkg` stays on the drive.
 - **Add to library**: adds a removed game back.
-- **Scan for games**: checks the drives now instead of waiting for the next scan (every 10 seconds).
+- **Scan for games**: checks the drives now and shows how many games were found on each one.
 - **Log**: shows the PS4Mount log.
 - **Stop**: stops PS4Mount. Its games cannot start until it is loaded again.
 
