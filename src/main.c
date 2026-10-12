@@ -7,8 +7,9 @@
  *   1. A PS4 app pkg found at the root of /mnt/usbN or /mnt/extN is moved to
  *      <root>/ps4/<TITLE_ID>/app.pkg (same disk, rename only).
  *   2. For each <root>/ps4/<TITLE_ID>/app.pkg the files a real install leaves
- *      behind are generated from the pkg, the folder is mounted over
- *      /user/app/<TITLE_ID> (nullfs) and the title is added to app.db/appinfo.db.
+ *      behind are generated from the pkg into an internal folder next to a symlink
+ *      to the pkg, that folder is mounted over /user/app/<TITLE_ID> (nullfs) and
+ *      the title is added to app.db/appinfo.db.
  *   3. Mounts whose storage disappeared are released.
  * Titles installed the normal way are never touched. */
 #include <dirent.h>
@@ -41,6 +42,11 @@
 #define LOCK_PORT 9032
 #define SCAN_SECONDS 10
 #define STATE_DIR "/data/ps4mount"
+/* Internal folders mounted over /user/app/<TID> and /user/patch/<TID>: the files an
+ * install leaves there plus app.pkg/patch.pkg as symlinks to the pkgs on the drive.
+ * /user is bfs, which has no symlinks; /system_data is ufs. A delete from the
+ * console only ever removes these links, never the pkgs. */
+#define HOLD_DIR "/system_data/ps4mount"
 #define MAX_TITLES 256
 
 typedef struct { char useless[45]; char message[3075]; } notify_request_t;
@@ -262,12 +268,38 @@ static void rm_tree(const char *path) {
     rmdir(path);
 }
 
+static void hold_path(char *out, size_t n, const char *kind, const char *tid) {
+    snprintf(out, n, HOLD_DIR "/%s/%s", kind, tid);
+}
+
+/* Fresh internal folder for kind ("app"/"patch") with name -> pkg_path. */
+static int hold_prepare(const char *kind, const char *tid, const char *name, const char *pkg_path) {
+    char dir[PATH_MAX], link[PATH_MAX];
+    hold_path(dir, sizeof(dir), kind, tid);
+    mkdirs(dir, 0777);
+    snprintf(link, sizeof(link), "%s/%s", dir, name);
+    unlink(link);
+    if (symlink(pkg_path, link)) {
+        printf("[reg] symlink %s: %s\n", link, strerror(errno));
+        return -1;
+    }
+    return 0;
+}
+
+/* The link of kind exists and reaches its pkg. */
+static int hold_ready(const char *kind, const char *tid, const char *name) {
+    char p[PATH_MAX];
+    hold_path(p, sizeof(p), kind, tid);
+    snprintf(p + strlen(p), sizeof(p) - strlen(p), "/%s", name);
+    return exists(p);
+}
+
 static int place_files(title_src_t *t) {
     pkg_t *app = &t->app, *pat = t->has_patch ? &t->patch : NULL;
     const char *tid = app->title_id, *cid = app->content_id;
     const sfo_item_t *av = sfo_get(&t->app_sfo, "APP_VER");
     const char *app_ver = av && !av->is_int ? av->sval : "01.00";
-    char p[PATH_MAX], q[PATH_MAX];
+    char p[PATH_MAX], q[PATH_MAX], hold[PATH_MAX];
     int rc = 0;
 
     snprintf(p, sizeof(p), "/user/appmeta/%s", tid);
@@ -321,13 +353,15 @@ static int place_files(title_src_t *t) {
         rc = -1;
         goto out;
     }
-    snprintf(q, sizeof(q), "%s/app.json", t->dir);
+    rc |= hold_prepare("app", tid, "app.pkg", t->app_path);
+    hold_path(hold, sizeof(hold), "app", tid);
+    snprintf(q, sizeof(q), "%s/app.json", hold);
     rc |= write_buf(q, &json);
-    snprintf(q, sizeof(q), "%s/app.pbm", t->dir);
+    snprintf(q, sizeof(q), "%s/app.pbm", hold);
     rc |= write_buf(q, &pbm);
-    snprintf(q, sizeof(q), "%s/app.pbm.backup", t->dir);
+    snprintf(q, sizeof(q), "%s/app.pbm.backup", hold);
     rc |= write_buf(q, &pbm);
-    snprintf(q, sizeof(q), "%s/app.xml", t->dir);
+    snprintf(q, sizeof(q), "%s/app.xml", hold);
     rc |= write_buf(q, &xml);
     snprintf(p, sizeof(p), "/system_data/playgo/%s", tid);
     mkdirs(p, 0777);
@@ -343,13 +377,15 @@ static int place_files(title_src_t *t) {
     rc |= write_buf(q, &pdb);
     snprintf(p, sizeof(p), "/user/playgo/patch/%s", cid);
     if (pat) {
-        snprintf(q, sizeof(q), "%s/patch.json", t->dir);
+        rc |= hold_prepare("patch", tid, "patch.pkg", t->patch_path);
+        hold_path(hold, sizeof(hold), "patch", tid);
+        snprintf(q, sizeof(q), "%s/patch.json", hold);
         rc |= write_buf(q, &pjson);
-        snprintf(q, sizeof(q), "%s/patch.pbm", t->dir);
+        snprintf(q, sizeof(q), "%s/patch.pbm", hold);
         rc |= write_buf(q, &ppbm_patch);
-        snprintf(q, sizeof(q), "%s/patch.pbm.backup", t->dir);
+        snprintf(q, sizeof(q), "%s/patch.pbm.backup", hold);
         rc |= write_buf(q, &ppbm_patch);
-        snprintf(q, sizeof(q), "%s/patch.xml", t->dir);
+        snprintf(q, sizeof(q), "%s/patch.xml", hold);
         rc |= write_buf(q, &pxml);
         snprintf(p, sizeof(p), "/user/playgo/patch/%s/00/00.00", cid);
         mkdirs(p, 0777);
@@ -359,6 +395,8 @@ static int place_files(title_src_t *t) {
         rc |= write_buf(q, &patch_pdb);
     } else {
         rm_tree(p);
+        hold_path(hold, sizeof(hold), "patch", tid);
+        rm_tree(hold);
     }
 out:
     free(pg);
@@ -377,18 +415,16 @@ out:
 
 #define IOV(s) {(void *)(s), strlen(s) + 1}
 
-/* Titles this daemon serves. The USB folder stays read-only (a system
- * uninstall then cannot touch it) except while the game is starting/running. */
+/* Titles this daemon serves. */
 typedef struct {
-    int used, has_patch, rw, running;
+    int used, has_patch, running;
     time_t running_since; /* launch seen in klog; the sandbox mount appears shortly after */
-    time_t rw_until; /* selected on the home screen: back to read-only after this */
     char tid[10], cid[37], name[128], dir[PATH_MAX];
 } managed_t;
 
 static managed_t g_managed[MAX_TITLES];
 static int g_manual_scan; /* "Scan for games" in the panel */
-static int g_deleting; /* a delete dialog is open: USB folders are unmounted */
+static int g_deleting; /* a delete screen is open: game folders are unmounted */
 static time_t g_deleting_since;
 
 static managed_t *managed_by(const char *tid, const char *cid) {
@@ -398,27 +434,24 @@ static managed_t *managed_by(const char *tid, const char *cid) {
     return NULL;
 }
 
-/* Top mount on target: 0 none, 1 our read-only layer, 2 our read-write layer, -1 something else. */
+/* Top mount on target: 0 none, 1 our folder, -1 something else (like a USB
+ * folder mounted by an older PS4Mount). */
 static int top_layer(const char *target, const char *dir) {
     struct statfs sf;
     if (statfs(target, &sf) || strcmp(sf.f_mntonname, target))
         return 0;
-    if (strcmp(sf.f_fstypename, "nullfs") || strcmp(sf.f_mntfromname, dir))
-        return -1;
-    return sf.f_flags & MNT_RDONLY ? 1 : 2;
+    return strcmp(sf.f_fstypename, "nullfs") || strcmp(sf.f_mntfromname, dir) ? -1 : 1;
 }
 
-static int nullfs_mount(const char *dir, const char *target, int rw) {
+static int nullfs_mount(const char *dir, const char *target) {
     struct iovec iov[] = {IOV("fstype"), IOV("nullfs"), IOV("from"), IOV(dir), IOV("fspath"), IOV(target)};
-    if (nmount(iov, 6, rw ? 0 : MNT_RDONLY)) {
-        printf("[mount] %s -> %s (%s): %s\n", dir, target, rw ? "rw" : "ro", strerror(errno));
+    if (nmount(iov, 6, 0)) {
+        printf("[mount] %s -> %s: %s\n", dir, target, strerror(errno));
         return -1;
     }
     return 0;
 }
 
-/* One layer per path: switching read-only <-> read-write is unmount + mount
- * (this nullfs supports neither MNT_UPDATE nor a writable layer on top). */
 /* A running PS4 title keeps /mnt/sandbox/pfsmnt/<TID>-app0 mounted. Unlike the klog
  * events this survives a restart of the daemon, so it is the reference for "running". */
 static int title_running(const char *tid) {
@@ -438,10 +471,10 @@ static int title_running(const char *tid) {
     return found;
 }
 
-static int mount_dir(const char *dir, const char *target, int rw) {
+static int mount_dir(const char *dir, const char *target) {
     mkdir(target, 0777);
     int top = top_layer(target, dir);
-    if (top == (rw ? 2 : 1))
+    if (top == 1)
         return 0;
     while (top != 0) {
         if (unmount(target, 0)) {
@@ -450,7 +483,7 @@ static int mount_dir(const char *dir, const char *target, int rw) {
         }
         top = top_layer(target, dir);
     }
-    return nullfs_mount(dir, target, rw);
+    return nullfs_mount(dir, target);
 }
 
 static void unmount_all_layers(const char *target, int force) {
@@ -472,19 +505,21 @@ static void unmount_title(const char *tid) {
 }
 
 /* /user/app/<TID> always, /user/patch/<TID> only with an update. */
-static int mount_paths(const char *dir, const char *tid, int has_patch, int rw) {
-    char target[64];
+static int mount_paths(const char *tid, int has_patch) {
+    char target[64], hold[PATH_MAX];
     snprintf(target, sizeof(target), "/user/app/%s", tid);
-    if (mount_dir(dir, target, rw))
+    hold_path(hold, sizeof(hold), "app", tid);
+    if (mount_dir(hold, target))
         return -1;
     snprintf(target, sizeof(target), "/user/patch/%s", tid);
+    hold_path(hold, sizeof(hold), "patch", tid);
     if (has_patch)
-        return mount_dir(dir, target, rw);
+        return mount_dir(hold, target);
     unmount_all_layers(target, 1);
     return 0;
 }
 
-static int mount_title(const title_src_t *t, int rw) { return mount_paths(t->dir, t->app.title_id, t->has_patch, rw); }
+static int mount_title(const title_src_t *t) { return mount_paths(t->app.title_id, t->has_patch); }
 
 static void manage(const title_src_t *t) {
     managed_t *m = managed_by(t->app.title_id, NULL);
@@ -498,10 +533,8 @@ static void manage(const title_src_t *t) {
     memset(m, 0, sizeof(*m));
     m->used = 1;
     if (keep.used) {
-        m->rw = keep.rw;
         m->running = keep.running;
         m->running_since = keep.running_since;
-        m->rw_until = keep.rw_until;
     }
     m->has_patch = t->has_patch;
     snprintf(m->tid, sizeof(m->tid), "%s", t->app.title_id);
@@ -510,23 +543,6 @@ static void manage(const title_src_t *t) {
     snprintf(m->dir, sizeof(m->dir), "%s", t->dir);
 }
 
-static int top_layer_rw(const managed_t *m) {
-    char target[64];
-    snprintf(target, sizeof(target), "/user/app/%s", m->tid);
-    return top_layer(target, m->dir) == 2;
-}
-
-/* Desired state is kept even when the switch fails; the next scan retries it.
- * Going writable retries for ~300 ms: the system may hold a file for a moment. */
-static void set_rw(managed_t *m, int rw) {
-    m->rw = rw;
-    int rc = mount_paths(m->dir, m->tid, m->has_patch, rw);
-    for (int i = 0; rc && rw && i < 15; i++) {
-        usleep(20000);
-        rc = mount_paths(m->dir, m->tid, m->has_patch, rw);
-    }
-    printf("[mount] %s %s%s\n", m->tid, rw ? "read-write" : "read-only", rc ? " (pending)" : "");
-}
 
 static int removed(const char *tid) {
     char p[64];
@@ -562,7 +578,9 @@ static int title_state(title_src_t *t) {
         return -1;
     char pdb[PATH_MAX];
     snprintf(pdb, sizeof(pdb), "/user/playgo/app/%s/00/d0.pdb", t->app.content_id);
-    return !db_is_registered(tid) || !exists(pdb) || !marker_matches(tid, t->marker);
+    /* folders set up by 0.3.1 and older lack the internal folder: registered again */
+    return !db_is_registered(tid) || !exists(pdb) || !marker_matches(tid, t->marker) ||
+           !hold_ready("app", tid, "app.pkg") || (t->has_patch && !hold_ready("patch", tid, "patch.pkg"));
 }
 
 static void pump_events(int ms);
@@ -594,9 +612,8 @@ static void enforce_patch_sfo(title_src_t *t) {
 
 static int register_title(title_src_t *t) {
     const char *tid = t->app.title_id;
-    if (place_files(t) || mount_title(t, 1))
+    if (place_files(t) || mount_title(t))
         return -1;
-    /* Known from now on: a launch while registering keeps the folder writable. */
     manage(t);
     /* New title: let ShellCore register everything under /user/app itself.
      * That path also refreshes the home screen and fetches the PSN concept. */
@@ -624,8 +641,7 @@ static int register_title(title_src_t *t) {
     if (write_file(marker, t->marker, strlen(t->marker), 0666))
         return -1;
     manage(t);
-    managed_t *m = managed_by(tid, NULL);
-    return mount_title(t, m && m->rw);
+    return 0;
 }
 
 /* Logs a skipped root file once per daemon run. */
@@ -784,18 +800,11 @@ static void scan_root(const char *root, int fresh, int reconnected) {
             managed_t *m = managed_by(t->tid, NULL);
             int running = title_running(t->tid);
             if (m && running && !m->running) {
-                /* open before this daemon started (restart or crash): keep it writable */
-                printf("[scan] %s is running, keeping it read-write\n", t->tid);
-                m->running = 1;
-                m->rw = 1;
-                m->rw_until = 0;
+                m->running = 1; /* open before this daemon started (restart or crash) */
             } else if (m && !running && m->running && time(NULL) - m->running_since > 60) {
-                /* closed without a klog end event: back to read-only */
-                printf("[scan] %s is no longer running\n", t->tid);
-                m->running = 0;
-                m->rw = 0;
+                m->running = 0; /* closed without a klog end event */
             }
-            if (mount_title(&src, m ? m->rw : 0))
+            if (mount_title(&src))
                 notify("Failed to mount %s (%s)", src.name, t->tid);
         } else {
             notify("Adding %d/%d: %s%s (%s)", ++done, pending, src.name,
@@ -888,7 +897,42 @@ static void end_delete_window(void) {
     g_deleting = 0;
     for (int i = 0; i < MAX_TITLES; i++)
         if (g_managed[i].used)
-            set_rw(&g_managed[i], g_managed[i].rw);
+            mount_paths(g_managed[i].tid, g_managed[i].has_patch);
+    printf("[delete] window closed, game folders mounted again\n");
+}
+
+/* Screens of the two delete flows: the home screen (Options > Delete) and
+ * Settings > Storage. From the first of them until focus leaves both flows the game
+ * folders are unmounted, so a delete removes /user/app/<TID> cleanly (a mount point
+ * cannot be removed). Returns 2 for a screen that opens the window, 1 for a screen
+ * that keeps it open (menus and dialogs on the way), 0 otherwise. */
+static int delete_scene(const char *name) {
+    static const char *opens[] = {"AppDeleteConfirmScene", "console storage delete content", "DeleteDialogScreen", NULL};
+    static const char *keeps[] = {"AppDeletingScene", "ReactPopupMenu", "Noname", "Render.NPXS40021",
+                                  "storage management", NULL};
+    for (int i = 0; opens[i]; i++)
+        if (strstr(name, opens[i]))
+            return 2;
+    for (int i = 0; keeps[i]; i++)
+        if (strstr(name, keeps[i]))
+            return 1;
+    return 0;
+}
+
+static void start_delete_window(void) {
+    g_deleting_since = time(NULL);
+    if (g_deleting)
+        return;
+    g_deleting = 1;
+    for (int i = 0; i < MAX_TITLES; i++) {
+        managed_t *m = &g_managed[i];
+        if (!m->used)
+            continue;
+        if (m->running || title_running(m->tid))
+            continue; /* still open: unmounted when it closes (see the End event) */
+        unmount_title(m->tid);
+    }
+    printf("[delete] delete screen open, game folders unmounted\n");
 }
 
 /* Copies klog lines about our titles (and crash/mount errors) into the log. */
@@ -911,52 +955,35 @@ static void handle_klog_line(const char *line) {
     const char *p;
     char id[40];
     trace_klog(line);
-    if ((p = after(line, "NextImageUri=/user/appmeta/"))) {
-        /* game selected on the home screen: get writable before the launch */
-        snprintf(id, sizeof(id), "%.9s", p);
-        managed_t *m = managed_by(id, NULL);
-        if (m && !g_deleting && !m->running) {
-            if (!m->rw)
-                set_rw(m, 1);
-            m->rw_until = time(NULL) + 90;
+    if ((p = after(line, "OnFocusActiveSceneChanged ["))) {
+        /* "[from : type] -> [to : type]": follow the delete screens */
+        const char *to = strstr(p, "] -> [");
+        if (to) {
+            to += 6;
+            int kind = delete_scene(to);
+            if (kind == 2 || (kind == 1 && g_deleting))
+                start_delete_window();
+            else if (!kind && g_deleting)
+                end_delete_window();
         }
     } else if ((p = after(line, "launchApp("))) {
         snprintf(id, sizeof(id), "%.9s", p);
         managed_t *m = managed_by(id, NULL);
-        if (m && !g_deleting) {
+        if (m) {
             m->running = 1;
             m->running_since = time(NULL);
-            m->rw_until = 0;
-            if (!m->rw || top_layer_rw(m) != 1)
-                set_rw(m, 1);
         }
     } else if ((p = after(line, "[PlayGoService][End] end ("))) {
         snprintf(id, sizeof(id), "%.9s", p);
         managed_t *m = managed_by(id, NULL);
         if (m) {
             m->running = 0;
-            m->rw_until = 0;
             if (g_deleting) {
                 /* closed by a delete: take the folder away before the uninstall runs */
                 unmount_title(m->tid);
-                printf("[delete] %s closed, USB folder unmounted\n", m->tid);
-            } else {
-                set_rw(m, 0);
+                printf("[delete] %s closed, game folder unmounted\n", m->tid);
             }
         }
-    } else if (strstr(line, "-> [AppDeleteConfirmScene")) {
-        /* Delete dialog: take the USB folders away so the uninstall only removes the entry. */
-        g_deleting = 1;
-        g_deleting_since = time(NULL);
-        for (int i = 0; i < MAX_TITLES; i++) {
-            managed_t *m = &g_managed[i];
-            if (!m->used)
-                continue;
-            if (m->running || title_running(m->tid))
-                continue; /* still open: unmounted when it closes (see the End event) */
-            unmount_title(m->tid);
-        }
-        printf("[delete] dialog open, USB folders unmounted\n");
     } else if ((p = after(line, "[PlayGoCore][Uninstall] end ("))) {
         snprintf(id, sizeof(id), "%.36s", p);
         managed_t *m = managed_by(NULL, id);
@@ -966,14 +993,14 @@ static void handle_klog_line(const char *line) {
             write_file(path, m->dir, strlen(m->dir), 0666);
             snprintf(path, sizeof(path), STATE_DIR "/%s.src", m->tid);
             unlink(path);
+            char hold[PATH_MAX];
+            hold_path(hold, sizeof(hold), "app", m->tid);
+            rm_tree(hold);
+            hold_path(hold, sizeof(hold), "patch", m->tid);
+            rm_tree(hold);
             notify("%s removed from the library. The pkg stays on the USB drive.", m->name);
             m->used = 0;
         }
-    } else if (g_deleting && (strstr(line, "[AppDeletingScene : AppDeletingScene] -> [") ||
-                              (strstr(line, "[AppDeleteConfirmScene : AppDeleteConfirmScene] -> [") &&
-                               !strstr(line, "AppDeletingScene]")))) {
-        printf("[delete] dialog closed\n");
-        end_delete_window();
     }
 }
 
@@ -1309,15 +1336,8 @@ int main(void) {
             notify(VERSION " stopped");
             return 0;
         }
-        if (g_deleting && time(NULL) - g_deleting_since > 120)
-            end_delete_window(); /* dialog close line missed */
-        for (int i = 0; i < MAX_TITLES; i++) {
-            managed_t *m = &g_managed[i];
-            if (m->used && m->rw && !m->running && m->rw_until && time(NULL) > m->rw_until) {
-                m->rw_until = 0;
-                set_rw(m, 0);
-            }
-        }
+        if (g_deleting && time(NULL) - g_deleting_since > 600)
+            end_delete_window(); /* the line of the screen change was missed */
         if (time(NULL) >= g_next_scan && !g_deleting) {
             scan_all();
             g_next_scan = time(NULL) + SCAN_SECONDS;

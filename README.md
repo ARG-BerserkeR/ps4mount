@@ -93,8 +93,9 @@ The panel has no password. Anyone on your local network can open it.
 
 ### Removing games
 
-Deleting a game from the PS5 (Options > Delete), or using **Remove from library** in the panel,
-removes the game from the library and leaves the `.pkg` on the drive. A removed game comes back
+Deleting a game from the PS5 (Options > Delete on the home screen, or Settings > Storage), or using
+**Remove from library** in the panel, removes the game from the library and leaves the `.pkg` on the
+drive. A removed game comes back
 when you reconnect the drive or click **Add to library**.
 
 To delete the game for good, delete its `/ps4/CUSAxxxxx` folder from the drive on a computer.
@@ -134,19 +135,20 @@ Do not attach `.pkg` files or links to them.
 A PS4 PKG install on the PS5 is mostly a byte copy of the package to `/user/app/<TITLE_ID>/app.pkg`
 plus some metadata. PS4Mount skips the copy:
 
-1. It mounts the game folder from the USB drive over `/user/app/<TITLE_ID>` (and over
-   `/user/patch/<TITLE_ID>` when there is an update) with `nullfs`.
-2. It writes the files an install would leave on the console, generated from the package itself:
+1. It writes the files an install would leave on the console, generated from the package itself:
    `app.json`, `app.pbm`, `app.xml`, `patch.*`, the PlayGo records (`/user/playgo/...`,
    `/system_data/playgo/<TITLE_ID>/pfs.pbm`), the app metadata, and the fake license (`.rif`/`.idx`)
    decrypted from the package.
+2. The game files go into an internal folder, `/system_data/ps4mount/app/<TITLE_ID>` (and
+   `/system_data/ps4mount/patch/<TITLE_ID>` for an update), where `app.pkg` and `patch.pkg` are
+   symbolic links to the packages on the drive. That folder is mounted over `/user/app/<TITLE_ID>`
+   (and `/user/patch/<TITLE_ID>`) with `nullfs`. The drive itself is never mounted there.
 3. It asks the system to register the title (`sceAppInstUtilAppInstallAll`), which adds it to the
    library and refreshes the home screen. When an update is present it also writes the library rows
    with the update's version.
-4. The drive folder stays **read-only**, so a delete from the console cannot remove the package.
-   It becomes writable only while a game is selected or running, because the system needs write
-   access to start it. When a delete is confirmed, PS4Mount unmounts the drive folders first, so
-   the delete only removes the library entry.
+4. A delete from the console can only remove the links, never the packages. While a delete screen
+   is open (on the home screen or in Settings > Storage) PS4Mount also unmounts the game folders,
+   so the system can remove `/user/app/<TITLE_ID>` without an error.
 
 State and log are kept in `/data/ps4mount/`. The Media tab shortcut is `PMNT00001`
 (`/user/app/PMNT00001`).
