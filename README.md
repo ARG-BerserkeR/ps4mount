@@ -21,11 +21,13 @@ The web panel, opened from the **Media** tab:
 
 ## Features
 
-- Detects PS4 fake PKGs (game and update) in the root of any connected USB drive.
+- Detects PS4 fake PKGs (game, update and add-ons) in the root of any connected USB drive, or in other
+  folders chosen in the settings.
 - Adds the games to the home screen with their icon, name and update version.
 - Applies updates: put the update `.pkg` next to the game and it is picked up automatically.
 - Installs add-ons (DLC), with data or unlock-only. An add-on is matched to its game by title ID, or by
   the add-on IDs the game lists (so add-ons of another region of the same game work too).
+- Adds many games in groups, so a drive with dozens of games does not overload the console.
 - Games run from the drive; no internal storage is used for the packages.
 - Deleting a game from the PS5 removes it from the library only. The `.pkg` is never deleted.
 - Notifications while scanning (how many games were found on each drive) and for added and removed
@@ -70,7 +72,8 @@ On the first run PS4Mount moves every package it uses into a folder per game on 
 ```
 
 A game is reported as ready only after its add-ons are installed too. An add-on whose game is not on the
-same drive stays in the root, with a notification.
+same drive stays where it is and waits: it is moved and installed as soon as its game is on the drive.
+The scan notification says how many add-ons are waiting.
 
 Keep this layout. To add more games later, copy their `.pkg` files to the root of the drive again.
 
@@ -126,7 +129,16 @@ To delete the game for good, delete its `/ps4/CUSAxxxxx` folder from the drive o
 - Do not unplug the drive while a game is running.
 - For a game with an update, the library and the PS5's own "installed" notification show the version
   of the game pkg (for example 01.00). The game runs with the update; the web panel shows its version.
-- Games already installed the normal way on the console are never touched.
+- Games already installed the normal way on the console are never touched, and their add-ons on the
+  drive are not installed.
+- Rest mode powers the drive off. The games stay in the library and work again after waking up.
+- **Games with very many add-ons:** while a game runs, the console mounts each of its packages (the game,
+  the update and every add-on) with two virtual devices: a PS4 package holds an outer filesystem with the
+  real content as a second filesystem inside it. The console has 64 of these devices, so a running game
+  can use at most about 30 packages: the game, its update and roughly 29 add-ons. A game with more
+  add-ons (for example Civilization VII with 35) starts normally but only sees the first add-ons, in
+  alphabetical order of their label. This is a console limit that applies to installed games too; it
+  does not limit how many games you can have.
 - If a game fails to start right after being added, start it again. The log (panel > **Log**) shows
   what happened.
 
