@@ -1373,12 +1373,20 @@ static int single_instance(void) {
     a.sin_family = AF_INET;
     a.sin_port = htons(LOCK_PORT);
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    if (s < 0 || bind(s, (struct sockaddr *)&a, sizeof(a))) {
+    if (s < 0 || bind(s, (struct sockaddr *)&a, sizeof(a)) || listen(s, 1)) {
         if (s >= 0)
             close(s);
         return -1;
     }
     return s;
+}
+
+/* Rest mode closes the network sockets of payloads: a listening socket that stopped
+ * listening is found here so it can be opened again. */
+static int still_listening(int s) {
+    int on = 0;
+    socklen_t n = sizeof(on);
+    return s >= 0 && !getsockopt(s, SOL_SOCKET, SO_ACCEPTCONN, &on, &n) && on;
 }
 
 static int g_klog = -1, g_web = -1;
@@ -1452,7 +1460,8 @@ static void pump_events(int ms) {
 }
 
 int main(void) {
-    if (single_instance() < 0) {
+    int lock = single_instance();
+    if (lock < 0) {
         printf(VERSION " already running\n");
         return 0;
     }
@@ -1471,6 +1480,23 @@ int main(void) {
             unlink(STATE_DIR "/stop");
             notify(VERSION " stopped");
             return 0;
+        }
+        if (!still_listening(lock)) {
+            /* lost in rest mode: take it again, or stop if another PS4Mount has it now */
+            close(lock);
+            if ((lock = single_instance()) < 0) {
+                notify(VERSION " stopped: another PS4Mount is running");
+                return 0;
+            }
+            printf("[main] instance lock opened again\n");
+        }
+        if (!still_listening(g_web)) {
+            int was = g_web >= 0;
+            if (g_web >= 0)
+                close(g_web);
+            g_web = web_listen();
+            if (was || g_web >= 0) /* log changes only, not every retry */
+                printf("[main] web panel %s\n", g_web >= 0 ? "listening again" : "unavailable");
         }
         if (g_deleting && g_deleting_close_at && time(NULL) >= g_deleting_close_at)
             end_delete_window();
