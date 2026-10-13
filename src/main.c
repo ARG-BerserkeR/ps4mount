@@ -736,6 +736,16 @@ static int title_running(const char *tid) {
 static void unmount_all_layers(const char *target, int force);
 
 static int mount_dir(const char *dir, const char *target) {
+    /* /user/patch and /user/addcont only exist once the console installed an update or
+     * an add-on the normal way: create the parent like the system does (0770) */
+    char parent[64];
+    snprintf(parent, sizeof(parent), "%s", target);
+    char *slash = strrchr(parent, '/');
+    if (slash && slash != parent) {
+        *slash = 0;
+        if (mkdir(parent, 0770) == 0)
+            printf("[mount] created %s\n", parent);
+    }
     mkdir(target, 0777);
     if (dead_layer(target)) {
         printf("[mount] %s: removing a layer of a disconnected drive\n", target);
