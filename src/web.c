@@ -175,6 +175,17 @@ void web_serve(int listen_fd) {
     } else if (post && !strcmp(path, "/api/rescan")) {
         app_rescan();
         json_msg(fd, 1, "Scanning USB drives for games");
+    } else if (post && !strncmp(path, "/api/restore", 12) && (path[12] == 0 || path[12] == '?')) {
+        int rc;
+        if (strstr(path, "title_id="))
+            rc = title_param(path, tid) ? (snprintf(msg, sizeof(msg), "invalid title_id"), -1)
+                                        : app_restore(tid, msg, sizeof(msg));
+        else
+            rc = app_restore(NULL, msg, sizeof(msg));
+        json_msg(fd, !rc, msg);
+    } else if (post && !strcmp(path, "/api/restored/forget")) {
+        int rc = app_restored_forget(msg, sizeof(msg));
+        json_msg(fd, !rc, msg);
     } else if (!strcmp(path, "/api/config") && !post) {
         buf_t b = {0};
         app_config_json(&b);

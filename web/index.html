@@ -73,6 +73,11 @@ form.settings .row{display:flex;gap:8px;justify-content:flex-end}
     <span class="hint">Smaller groups are gentler on the system when many games are added at once.</span>
   </label>
   <label class="check"><input type="checkbox" id="s-dlc"> Install add-ons (DLC)</label>
+  <div class="hint">Pkgs moved back</div>
+  <div class="row" style="justify-content:flex-start">
+    <button type="button" class="danger" id="s-restore">Move all games back</button>
+    <button type="button" id="s-forget">Pick up moved-back pkgs again</button>
+  </div>
   <div class="row"><button type="button" id="s-cancel">Cancel</button><button class="primary" type="submit">Save</button></div>
 </form></dialog>
 <dialog id="logdlg"><h3>Log</h3><pre id="log"></pre><form method="dialog"><button>Close</button></form></dialog>
@@ -102,6 +107,8 @@ function render() {
     if (g.state === 'removed') act = '<button class="primary" data-a="mount" data-t="' + g.title_id + '">Add to library</button>';
     else if (g.state === 'ready') act = '<button class="danger" data-a="unmount" data-t="' + g.title_id + '">Remove from library</button>';
     else if (g.state === 'running') act = '<button disabled>Close the game to remove it</button>';
+    if (g.state !== 'running' && g.state !== 'internal')
+      act += '<button data-a="restore" data-t="' + g.title_id + '">Move pkgs back</button>';
     if (busy[g.title_id]) act = '<button disabled>Please wait…</button>';
     html += '<div class="card"><div class="art" style="background-image:url(/icon/' + g.title_id + ')">' +
       '<span class="badge b-' + g.state + '">' + esc(labels[g.state] || g.state) + '</span></div>' +
@@ -129,6 +136,8 @@ $('grid').addEventListener('click', function (e) {
   if (!b) return;
   var tid = b.getAttribute('data-t'), a = b.getAttribute('data-a');
   if (a === 'unmount' && !confirm('Remove ' + tid + ' from the library? The pkg stays on the USB drive.')) return;
+  if (a === 'restore' && !confirm('Move the pkgs of ' + tid + ' back to where they came from, with their original names?\n\n' +
+      'The game leaves the library and PS4Mount stops picking these pkgs up. No pkg is deleted.')) return;
   busy[tid] = 1; render();
   api('/api/' + a + '?title_id=' + tid, 'POST').then(function (j) { toast(j.message); })
     .catch(function (err) { toast('Error: ' + err.message); })
@@ -149,6 +158,17 @@ $('settingsbtn').onclick = function () {
 };
 $('s-batch').onchange = function () { $('s-size').disabled = !this.checked; };
 $('s-cancel').onclick = function () { $('setdlg').close(); };
+$('s-restore').onclick = function () {
+  if (!confirm('Move the pkgs of ALL games back to where they came from, with their original names?\n\n' +
+      'All PS4Mount games leave the library and PS4Mount stops picking these pkgs up. No pkg is deleted.')) return;
+  api('/api/restore', 'POST').then(function (j) { toast(j.message); $('setdlg').close(); })
+    .catch(function (err) { toast('Error: ' + err.message); });
+};
+$('s-forget').onclick = function () {
+  if (!confirm('Pick up the pkgs that were moved back again? They are moved into the ps4 folder and added on the next scan.')) return;
+  api('/api/restored/forget', 'POST').then(function (j) { toast(j.message); })
+    .catch(function (err) { toast('Error: ' + err.message); });
+};
 $('setform').onsubmit = function (e) {
   e.preventDefault();
   var body = 'batch=' + ($('s-batch').checked ? 1 : 0) + '&batch_size=' + encodeURIComponent($('s-size').value) +

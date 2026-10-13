@@ -57,6 +57,7 @@
 
 #define MAX_SCAN_PATHS 8
 #define CONFIG_PATH STATE_DIR "/config.txt"
+#define RESTORED_LIST STATE_DIR "/restored.txt" /* pkgs moved back: not picked up again */
 
 /* Settings, kept in CONFIG_PATH and edited in the panel. */
 typedef struct {
@@ -1275,6 +1276,12 @@ static int adopt_dir_pkgs(const char *root, const char *dir) {
         if (n < 5 || strcasecmp(e->d_name + n - 4, ".pkg"))
             continue;
         snprintf(path, sizeof(path), "%s/%s", dir, e->d_name);
+        struct stat rs;
+        if (!stat(path, &rs) && restored_has(RESTORED_LIST, drive_rel(root, path), (uint64_t)rs.st_size)) {
+            if (first_time(path))
+                printf("[scan] skip %s (moved back from ps4/ on request)\n", path);
+            continue;
+        }
         waiting_t *w = waiting_find(path);
         if (w && w->sig == g_lib_sig)
             continue; /* waiting add-on, and no new game since the last check */
@@ -2038,6 +2045,293 @@ int app_remove(const char *tid, char *msg, size_t cap) {
     return rc ? -1 : 0;
 }
 
+/* --- moving pkgs back where they came from --- */
+
+static void clean_name(char *s) {
+    for (; *s; s++)
+        if (strchr("\\:*?\"<>|", *s) || (unsigned char)*s < 0x20)
+            *s = '_';
+}
+
+/* Moves <game_dir>/<rel> to its recorded original path (or fallback, relative to the
+ * drive root, for pkgs moved before origins were recorded) and adds it to the list of
+ * restored pkgs. 1 moved, 0 nothing there, -1 failed. */
+static int restore_pkg(const char *root, const char *game_dir, const char *rel, const char *fallback) {
+    char src[PATH_MAX], orig[PATH_MAX], dst[PATH_MAX], dir[PATH_MAX];
+    snprintf(src, sizeof(src), "%s/%s", game_dir, rel);
+    struct stat st;
+    if (stat(src, &st))
+        return 0;
+    if (origin_find(game_dir, rel, orig, sizeof(orig))) {
+        snprintf(orig, sizeof(orig), "%s", fallback);
+        clean_name(orig);
+    }
+    snprintf(dir, sizeof(dir), "%s/%s", root, orig);
+    char *slash = strrchr(dir, '/');
+    if (slash && slash > dir + strlen(root))
+        *slash = 0, mkdirs(dir, 0777); /* the original folder may be gone */
+    if (origin_free_path(root, orig, dst, sizeof(dst)) || rename(src, dst)) {
+        printf("[restore] %s: %s\n", src, strerror(errno));
+        return -1;
+    }
+    restored_add(RESTORED_LIST, drive_rel(root, dst), (uint64_t)st.st_size);
+    printf("[restore] %s -> %s\n", src, dst);
+    return 1;
+}
+
+static void unlink_in(const char *dir, const char *const *names) {
+    char p[PATH_MAX];
+    for (; *names; names++) {
+        snprintf(p, sizeof(p), "%s/%s", dir, *names);
+        unlink(p);
+    }
+}
+
+/* Moves every pkg of one game folder back and removes what PS4Mount created for it.
+ * Folders are only removed when empty, so nothing else is ever deleted. */
+static void restore_files(const char *root, const char *tid, const char *name, int *moved, int *failed) {
+    static const char *const generated[] = {"app.json", "app.pbm", "app.pbm.backup", "app.xml", "patch.json",
+                                            "patch.pbm", "patch.pbm.backup", "patch.xml", NULL};
+    static const char *const ac_generated[] = {"ac.json", "ac.pbm", "ac.pbm.backup", NULL};
+    char game[PATH_MAX], rel[PATH_MAX], fb[PATH_MAX], sub[PATH_MAX];
+    snprintf(game, sizeof(game), "%s/ps4/%s", root, tid);
+    int rc;
+#define RESTORE(r, f)                                                                                                  \
+    do {                                                                                                               \
+        rc = restore_pkg(root, game, r, f);                                                                            \
+        *moved += rc > 0;                                                                                              \
+        *failed += rc < 0;                                                                                             \
+    } while (0)
+    snprintf(fb, sizeof(fb), "%s - %s - game.pkg", tid, name);
+    RESTORE("app.pkg", fb);
+    snprintf(fb, sizeof(fb), "%s - %s - update.pkg", tid, name);
+    RESTORE("patch.pkg", fb);
+    snprintf(sub, sizeof(sub), "%s/replaced", game);
+    DIR *d = opendir(sub);
+    struct dirent *e;
+    while (d && (e = readdir(d))) {
+        if (e->d_name[0] == '.')
+            continue;
+        snprintf(rel, sizeof(rel), "replaced/%s", e->d_name);
+        snprintf(fb, sizeof(fb), "%s - %s - older update %s", tid, name, e->d_name);
+        RESTORE(rel, fb);
+    }
+    if (d)
+        closedir(d);
+    rmdir(sub);
+    snprintf(sub, sizeof(sub), "%s/addcont", game);
+    d = opendir(sub);
+    while (d && (e = readdir(d))) {
+        if (e->d_name[0] == '.')
+            continue;
+        char tdir[PATH_MAX], hold[PATH_MAX];
+        snprintf(tdir, sizeof(tdir), "%s/%s", sub, e->d_name);
+        DIR *l = opendir(tdir);
+        struct dirent *f;
+        while (l && (f = readdir(l))) {
+            if (f->d_name[0] == '.')
+                continue;
+            char ldir[PATH_MAX + 64];
+            snprintf(ldir, sizeof(ldir), "%s/%s", tdir, f->d_name);
+            snprintf(rel, sizeof(rel), "addcont/%s/%s/ac.pkg", e->d_name, f->d_name);
+            snprintf(fb, sizeof(fb), "%s - %s - %s.pkg", e->d_name, name, f->d_name);
+            RESTORE(rel, fb);
+            unlink_in(ldir, ac_generated);
+            rmdir(ldir);
+            snprintf(hold, sizeof(hold), HOLD_DIR "/addcont/%s/%s", e->d_name, f->d_name);
+            rm_tree(hold);
+        }
+        if (l)
+            closedir(l);
+        rmdir(tdir);
+        snprintf(hold, sizeof(hold), HOLD_DIR "/addcont/%s", e->d_name);
+        rmdir(hold); /* kept while other games still use add-ons of this title */
+    }
+    if (d)
+        closedir(d);
+#undef RESTORE
+    rmdir(sub);
+    unlink_in(game, generated); /* written next to the pkgs by versions before 0.3.2 */
+    char marker[64];
+    snprintf(marker, sizeof(marker), "%s/" ORIGIN_FILE, game);
+    char probe[PATH_MAX];
+    snprintf(probe, sizeof(probe), "%s/app.pkg", game);
+    if (!exists(probe)) /* keep the record while a pkg could not be moved */
+        unlink(marker);
+    rmdir(game);
+    snprintf(probe, sizeof(probe), HOLD_DIR "/app/%s", tid);
+    rm_tree(probe);
+    snprintf(probe, sizeof(probe), HOLD_DIR "/patch/%s", tid);
+    rm_tree(probe);
+}
+
+/* Add-on title IDs of a game folder (its /user/addcont mounts). */
+static int folder_dlc_tids(const char *game, char (*tids)[10], int max) {
+    char sub[PATH_MAX];
+    snprintf(sub, sizeof(sub), "%s/addcont", game);
+    DIR *d = opendir(sub);
+    int n = 0;
+    struct dirent *e;
+    while (d && n < max && (e = readdir(d)))
+        if (strlen(e->d_name) == 9 && !strncmp(e->d_name, "CUSA", 4))
+            snprintf(tids[n++], 10, "%s", e->d_name);
+    if (d)
+        closedir(d);
+    return n;
+}
+
+/* Takes one game out of the library (through the system) and unmounts it. */
+static int restore_unregister(const char *root, const char *tid) {
+    char game[PATH_MAX], dtids[MAX_DLC_TIDS][10];
+    snprintf(game, sizeof(game), "%s/ps4/%s", root, tid);
+    int nd = folder_dlc_tids(game, dtids, MAX_DLC_TIDS);
+    unmount_title(tid, dtids, nd);
+    char msg[256];
+    if (!installed_internally(tid) && app_remove(tid, msg, sizeof(msg))) {
+        printf("[restore] %s kept: %s\n", tid, msg);
+        return -1;
+    }
+    return 0;
+}
+
+static void restore_clear_state(const char *tid) {
+    char p[64];
+    snprintf(p, sizeof(p), STATE_DIR "/%s.removed", tid);
+    unlink(p);
+    snprintf(p, sizeof(p), STATE_DIR "/%s.src", tid);
+    unlink(p);
+    retry_clear(tid);
+}
+
+/* Requests from the panel, run by the main loop: one title, or all of them. */
+static char g_restore_tid[10];
+static int g_restore_all;
+
+/* Folders of games on every connected drive (or only tid), with their name. */
+typedef struct {
+    char root[32], tid[10], name[128];
+} restore_item_t;
+
+static int restore_collect(const char *only, restore_item_t *items, int max) {
+    int n = 0;
+    for (int i = 0; i < 10 && n < max; i++) {
+        char root[32], lib[PATH_MAX];
+        if (i < 8)
+            snprintf(root, sizeof(root), "/mnt/usb%d", i);
+        else
+            snprintf(root, sizeof(root), "/mnt/ext%d", i - 8);
+        if (!is_mountpoint(root))
+            continue;
+        snprintf(lib, sizeof(lib), "%s/ps4", root);
+        DIR *d = opendir(lib);
+        struct dirent *e;
+        while (d && n < max && (e = readdir(d))) {
+            if (strlen(e->d_name) != 9 || strncmp(e->d_name, "CUSA", 4) || (only && strcmp(only, e->d_name)))
+                continue;
+            restore_item_t *it = &items[n++];
+            snprintf(it->root, sizeof(it->root), "%s", root);
+            snprintf(it->tid, sizeof(it->tid), "%s", e->d_name);
+            snprintf(it->name, sizeof(it->name), "%s", e->d_name);
+            char p[PATH_MAX];
+            snprintf(p, sizeof(p), "%s/%s/app.pkg", lib, e->d_name);
+            pkg_t pkg;
+            sfo_t sfo;
+            if (exists(p) && !pkg_open(&pkg, p)) {
+                const sfo_item_t *t = read_sfo(&pkg, &sfo) ? NULL : sfo_get(&sfo, "TITLE");
+                if (t) {
+                    snprintf(it->name, sizeof(it->name), "%s", t->sval);
+                    clean_name(it->name);
+                }
+                pkg_close(&pkg);
+            }
+        }
+        if (d)
+            closedir(d);
+    }
+    return n;
+}
+
+/* Moves the pkgs of the requested games back, in groups like when adding: the games of
+ * a group leave the library, their pkgs are moved, and the next group waits until the
+ * system databases are idle. */
+static void run_restore(const char *only) {
+    static restore_item_t items[MAX_TITLES];
+    int n = restore_collect(only, items, MAX_TITLES), moved = 0, failed = 0, done = 0, kept = 0;
+    for (int i = 0; i < n; i++)
+        if (title_running(items[i].tid)) {
+            notify("Close %s before moving its pkgs back", items[i].name);
+            return;
+        }
+    if (!n) {
+        notify("No PS4Mount games to move back");
+        return;
+    }
+    int size = g_cfg.batch && g_cfg.batch_size > 0 ? g_cfg.batch_size : n;
+    if (only)
+        notify("Moving the pkgs of %s back...", items[0].name);
+    else
+        notify("Moving the pkgs of %d game(s) back to where they came from...", n);
+    for (int i = 0; i < n; i += size) {
+        if (i)
+            wait_db_quiet(BATCH_QUIET, 120);
+        int end = i + size < n ? i + size : n;
+        for (int k = i; k < end; k++) {
+            if (restore_unregister(items[k].root, items[k].tid)) {
+                kept++;
+                continue;
+            }
+            pump_events(200);
+            restore_files(items[k].root, items[k].tid, items[k].name, &moved, &failed);
+            done++;
+        }
+    }
+    /* the uninstall events arrive late and mark the games as removed: clear that, so a
+     * game added again later is not taken for one removed on the console */
+    pump_events(3000);
+    for (int i = 0; i < n; i++)
+        restore_clear_state(items[i].tid);
+    clear_removed_dlc();
+    g_next_scan = 0;
+    if (only && done)
+        notify("%s: %d pkg file(s) moved back%s", items[0].name, moved,
+               failed ? ", some could not be moved (see the log)" : "");
+    else if (!only)
+        notify("%d pkg file(s) of %d game(s) moved back%s%s", moved, done,
+               failed ? ", some could not be moved (see the log)" : "",
+               kept ? ", some games could not leave the library (see the log)" : "");
+}
+
+int app_restore(const char *tid, char *msg, size_t cap) {
+    if (g_restore_all || g_restore_tid[0]) {
+        snprintf(msg, cap, "Already moving pkgs back, wait for it to finish");
+        return -1;
+    }
+    if (tid) {
+        char root[32];
+        if (find_root(tid, root, sizeof(root))) {
+            snprintf(msg, cap, "%s is not on any connected drive", tid);
+            return -1;
+        }
+        if (title_running(tid)) {
+            snprintf(msg, cap, "Close the game first");
+            return -1;
+        }
+        snprintf(g_restore_tid, sizeof(g_restore_tid), "%s", tid);
+        snprintf(msg, cap, "Moving the pkgs of %s back to where they came from", tid);
+        return 0;
+    }
+    g_restore_all = 1;
+    snprintf(msg, cap, "Moving the pkgs of all games back to where they came from");
+    return 0;
+}
+
+int app_restored_forget(char *msg, size_t cap) {
+    unlink(RESTORED_LIST);
+    g_next_scan = 0;
+    snprintf(msg, cap, "Pkgs moved back will be picked up again on the next scan");
+    return 0;
+}
+
 /* --- settings --- */
 
 /* A scan folder: relative to the drive, "" for the root. Folders inside ps4/ (where
@@ -2378,6 +2672,12 @@ int main(void) {
             end_delete_window();
         if (g_deleting && time(NULL) - g_deleting_since > 600)
             end_delete_window(); /* the line of the screen change was missed */
+        if (g_restore_tid[0] || g_restore_all) {
+            run_restore(g_restore_all ? NULL : g_restore_tid);
+            g_restore_tid[0] = 0;
+            g_restore_all = 0;
+            continue;
+        }
         if (time(NULL) >= g_next_scan && !g_deleting) {
             scan_all();
             g_next_scan = time(NULL) + SCAN_SECONDS;
