@@ -36,6 +36,7 @@
 #include "build.h"
 #include "crypto.h"
 #include "db.h"
+#include "origin.h"
 #include "pkg.h"
 #include "web.h"
 #include "icon_data.h"
@@ -1207,6 +1208,20 @@ static int waiting_count(const char *root) {
     return n;
 }
 
+/* Path of a file relative to the drive root it is on. */
+static const char *drive_rel(const char *root, const char *path) {
+    size_t n = strlen(root);
+    return !strncmp(path, root, n) && path[n] == '/' ? path + n + 1 : path;
+}
+
+/* Records where a pkg moved into <root>/ps4/<TID>/<rel> came from. */
+static void record_origin(const char *root, const char *tid, const char *rel, const char *from) {
+    char game[PATH_MAX];
+    snprintf(game, sizeof(game), "%s/ps4/%s", root, tid);
+    if (origin_add(game, rel, drive_rel(root, from)))
+        printf("[scan] %s: could not record where %s came from\n", game, rel);
+}
+
 /* Moves an add-on pkg (ac) into <root>/ps4/<GAME>/addcont/<ADD-ON TID>/<LABEL>/ac.pkg. */
 static int adopt_dlc(const char *root, const char *name, const char *path, pkg_t *pkg) {
     char game[10], dst[PATH_MAX];
@@ -1236,6 +1251,9 @@ static int adopt_dlc(const char *root, const char *name, const char *path, pkg_t
         return 0;
     }
     printf("[scan] moved %s -> %s\n", path, dst);
+    char rel[64];
+    snprintf(rel, sizeof(rel), "addcont/%s/%s/ac.pkg", pkg->title_id, pkg->content_id + 20);
+    record_origin(root, game, rel, path);
     return 1;
 }
 
@@ -1327,12 +1345,18 @@ static int adopt_dir_pkgs(const char *root, const char *dir) {
                 printf("[scan] keep %s aside: %s\n", dst, strerror(errno));
                 continue;
             }
+            /* the update kept aside keeps its original name */
+            char game[PATH_MAX], was[PATH_MAX];
+            snprintf(game, sizeof(game), "%s/ps4/%s", root, tid);
+            if (!origin_find(game, "patch.pkg", was, sizeof(was)))
+                origin_add(game, old + strlen(game) + 1, was);
             notify("New update for %s (v%s): the previous one was moved to ps4/%s/replaced", tid, ver, tid);
         }
         if (rename(path, dst)) {
             printf("[scan] move %s: %s\n", path, strerror(errno));
         } else {
             printf("[scan] moved %s -> %s\n", path, dst);
+            record_origin(root, tid, is_app ? "app.pkg" : "patch.pkg", path);
             moved++;
         }
     }
