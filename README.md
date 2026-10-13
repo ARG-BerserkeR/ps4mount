@@ -189,20 +189,20 @@ settings. A `.pkg` you move, rename or replace yourself is picked up as usual.
 
 ## Reporting problems
 
-If something does not work, open an issue at
-[github.com/gasb07/ps4mount/issues](https://github.com/gasb07/ps4mount/issues) with:
+If something does not work, open an issue with the
+[bug report form](https://github.com/gasb07/ps4mount/issues/new?template=bug_report.yml). It asks for
+what is needed to find the cause:
 
 1. **PS4Mount version**: shown at the top of the web panel and in the startup notification.
-2. **PS5 firmware** and the **jailbreak / HEN** you use, with its version (for example etaHEN 2.x
-   with kstuff).
-3. **The game**: name and title ID (`CUSAxxxxx`), and whether it has an update (the version shown
-   in the panel).
-4. **What happened**: what you did, what you expected, and the exact message or error code shown on
+2. **PS5 firmware**, the **jailbreak / HEN** and every **payload** you load, with their versions.
+3. Whether **klogsrv** is running.
+4. **The game**: name and title ID (`CUSAxxxxx`), and whether it has an update and add-ons.
+5. **Your drives**: how many are connected, how they are formatted (exFAT) and whether a drive has
+   more than one partition.
+6. **What happened**: what you did, what you expected, and the exact message or error code shown on
    the console.
-5. **The log**: open the web panel, click **Log** and copy the text, or download
+7. **The log**: open the web panel, click **Log** and copy the text, or download
    `/data/ps4mount/log.txt` over FTP. Include the part from the moment the problem happened.
-6. **Your setup**: whether klogsrv is running, how the drive is formatted (exFAT) and other payloads
-   you load at the same time.
 
 Do not attach `.pkg` files or links to them.
 
