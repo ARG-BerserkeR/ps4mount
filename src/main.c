@@ -1863,6 +1863,27 @@ static void trace_klog(const char *line) {
         }
 }
 
+/* "system file disagree [<TID>]": the system refused to start a game with an update.
+ * Removing the game from the library and adding it again made it start; this is done
+ * once per title and daemon run, so a game that still fails is not removed again. */
+static char g_readd_tid[10];
+static char g_readd_done[MAX_TITLES][10];
+static int g_nreadd_done;
+
+static void disagree_seen(const char *tid) {
+    managed_t *m = managed_by(tid, NULL);
+    if (!m)
+        return;
+    m->running = 0; /* the launch was refused */
+    for (int i = 0; i < g_nreadd_done; i++)
+        if (!strcmp(g_readd_done[i], tid)) {
+            printf("[reg] %s: system file disagree again, it was already added again once\n", tid);
+            return;
+        }
+    if (m->has_patch && !g_readd_tid[0])
+        snprintf(g_readd_tid, sizeof(g_readd_tid), "%s", tid);
+}
+
 static void handle_klog_line(const char *line) {
     const char *p;
     char id[40];
@@ -1887,6 +1908,9 @@ static void handle_klog_line(const char *line) {
             m->running = 1;
             m->running_since = time(NULL);
         }
+    } else if ((p = after(line, "system file disagree ["))) {
+        snprintf(id, sizeof(id), "%.9s", p);
+        disagree_seen(id);
     } else if ((p = after(line, "[PlayGoService][End] end ("))) {
         snprintf(id, sizeof(id), "%.9s", p);
         managed_t *m = managed_by(id, NULL);
@@ -2158,6 +2182,22 @@ int app_remove(const char *tid, char *msg, size_t cap) {
         snprintf(msg, cap, rc ? "Failed to remove %s (0x%08x)" : "%s removed from the library. The pkg stays on the USB drive.",
                  tid, rc);
     return rc ? -1 : 0;
+}
+
+/* Removes a game refused with "system file disagree" from the library and adds it again. */
+static void readd_title(const char *tid) {
+    char msg[256], name[128];
+    managed_t *m = managed_by(tid, NULL);
+    snprintf(name, sizeof(name), "%s", m ? m->name : tid);
+    if (g_nreadd_done < MAX_TITLES)
+        snprintf(g_readd_done[g_nreadd_done++], 10, "%s", tid);
+    pump_events(5000); /* let the system finish the refused launch */
+    notify("%s did not start (system file disagree): adding it to the library again", name);
+    int rc = app_remove(tid, msg, sizeof(msg));
+    printf("[reg] %s: removed to add it again: %s\n", tid, msg);
+    if (!rc)
+        wait_db_quiet(3, 30);
+    app_add(tid, msg, sizeof(msg));
 }
 
 /* --- moving pkgs back where they came from --- */
@@ -2803,6 +2843,13 @@ int main(void) {
             run_restore(g_restore_all ? NULL : g_restore_tid);
             g_restore_tid[0] = 0;
             g_restore_all = 0;
+            continue;
+        }
+        if (g_readd_tid[0] && !g_deleting) {
+            char tid[10];
+            snprintf(tid, sizeof(tid), "%s", g_readd_tid);
+            g_readd_tid[0] = 0;
+            readd_title(tid);
             continue;
         }
         if (time(NULL) >= g_next_scan && !g_deleting) {
