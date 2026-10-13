@@ -127,6 +127,11 @@ To delete the game for good, delete its `/ps4/CUSAxxxxx` folder from the drive o
 - Load PS4Mount soon after every boot. While it is not running, the console does not see the
   packages and may hide the games; they come back as soon as PS4Mount runs again.
 - Do not unplug the drive while a game is running.
+- **Two or more drives connected at the same time can make the whole console interface slow** (home
+  screen, Control Center, game hubs), with or without PS4Mount: the system checks its storage devices
+  more often with each extra drive or partition. A drive with extra partitions (for example a boot
+  partition added by a multiboot tool) counts as several. If the interface gets slow, keep one drive
+  connected, ideally with a single partition.
 - For a game with an update, the library and the PS5's own "installed" notification show the version
   of the game pkg (for example 01.00). The game runs with the update; the web panel shows its version.
 - Games already installed the normal way on the console are never touched, and their add-ons on the
