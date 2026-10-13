@@ -915,7 +915,10 @@ static void scan_root(const char *root, int fresh, int reconnected) {
         notify("%s: %d of %d game(s) added", label, ok, pending);
 }
 
-/* Releases /user/app/<TID> mounts whose source folder is gone. */
+/* Releases mounts over /user/app/<TID> of older versions, which mounted the drive
+ * folder itself, once that folder is gone. The internal folders mounted now stay
+ * while the drive is away (rest mode powers drives off): their pkg links simply
+ * point to nothing until the drive is back. */
 static void release_stale(void) {
     DIR *d = opendir(STATE_DIR);
     if (!d)
@@ -928,7 +931,7 @@ static void release_stale(void) {
         char tid[10], target[64], from[PATH_MAX], pkg_path[PATH_MAX + 16];
         snprintf(tid, sizeof(tid), "%.9s", e->d_name);
         snprintf(target, sizeof(target), "/user/app/%s", tid);
-        if (!mounted_from(target, from, sizeof(from)))
+        if (!mounted_from(target, from, sizeof(from)) || strncmp(from, "/mnt/", 5))
             continue;
         snprintf(pkg_path, sizeof(pkg_path), "%s/app.pkg", from);
         if (!exists(pkg_path)) {
