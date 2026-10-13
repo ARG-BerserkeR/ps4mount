@@ -1353,8 +1353,11 @@ static int adopt_dir_pkgs(const char *root, const char *dir) {
         if (w && w->sig == g_lib_sig)
             continue; /* waiting add-on, and no new game since the last check */
         pkg_t pkg;
-        if (pkg_open(&pkg, path))
+        if (pkg_open(&pkg, path)) {
+            if (pass == 0 && first_time(path))
+                printf("[scan] skip %s (cannot read the pkg header: not a PS4 pkg, or unreadable)\n", path);
             continue;
+        }
         sfo_t sfo;
         const sfo_item_t *cat = NULL;
         if (!read_sfo(&pkg, &sfo))
@@ -1363,7 +1366,10 @@ static int adopt_dir_pkgs(const char *root, const char *dir) {
         int is_dlc = cat && !strcmp(cat->sval, "ac");
         if (is_dlc || pass == 1) {
             /* add-ons go in the second pass: their game may be in this folder too */
-            if (pass == 1 && is_dlc && !strncmp(pkg.title_id, "CUSA", 4)) {
+            if (pass == 1 && is_dlc && strncmp(pkg.title_id, "CUSA", 4)) {
+                if (first_time(path))
+                    printf("[scan] skip %s (add-on %s is not for a PS4 title)\n", path, pkg.content_id);
+            } else if (pass == 1 && is_dlc) {
                 if (!g_cfg.dlc) {
                     if (first_time(path))
                         printf("[scan] skip %s (add-ons are turned off)\n", path);
