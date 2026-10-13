@@ -48,10 +48,11 @@ The web panel, opened from the **Media** tab:
 ## Requirements
 
 - A jailbroken PS5 with fake PKG support (for example etaHEN with kstuff).
-  Firmware **6.00 or newer** (reported working on 6.50, tested on 13.20). Below 6.00 the usual system
-  registration made the console report a corrupted database (5.50), so PS4Mount uses an
-  **experimental** per-title registration there when the firmware has it, and otherwise does not add
-  games. The startup notification and the log say which one is used.
+  Any firmware with fake PKG support. From 6.00 the games are registered the usual way (reported
+  working on 6.50, tested on 13.20). Below 6.00 that made the console report a corrupted database
+  (5.50), so there PS4Mount registers each game on its own (confirmed working on 5.50), and does not
+  add games if the firmware lacks that function. The startup notification and the log say which one
+  is used.
 - An ELF loader listening on port **9021** to send the payload.
 - Access to the kernel log: either **klogsrv** running on port 3232, or no other payload reading
   `/dev/klog`. PS4Mount reads the system log to know when a game starts and when a delete is

@@ -955,7 +955,7 @@ static void enforce_patch_sfo(title_src_t *t) {
 /* How titles are registered by the system, chosen from the firmware at startup:
  *   REG_ALL      sceAppInstUtilAppInstallAll: the system registers every new title under
  *                /user/app. Used from 6.00 on (works on 6.50 and 13.20).
- *   REG_TITLEDIR sceAppInstUtilAppInstallTitleDir, one title at a time (experimental). On
+ *   REG_TITLEDIR sceAppInstUtilAppInstallTitleDir, one title at a time (works on 5.50). On
  *                5.50 InstallAll made the system check its whole app database and flag it
  *                as corrupted; below 6.00 the per-title call is used when the firmware has
  *                it (it was removed in newer firmwares: not present on 13.20).
@@ -973,7 +973,7 @@ static title_dir_fn g_title_dir;
 static char g_fw_text[16] = "unknown";
 
 static const char *reg_mode_name(void) {
-    return g_reg_mode == REG_ALL ? "AppInstallAll" : g_reg_mode == REG_TITLEDIR ? "AppInstallTitleDir (experimental)" : "none";
+    return g_reg_mode == REG_ALL ? "AppInstallAll" : g_reg_mode == REG_TITLEDIR ? "AppInstallTitleDir" : "none";
 }
 
 static void check_firmware(void) {
@@ -2722,8 +2722,8 @@ int main(void) {
         notify(g_web >= 0 ? VERSION " running. Panel in the Media tab or http://<PS5 IP>:8770"
                           : VERSION " running (panel unavailable)");
     else if (g_reg_mode == REG_TITLEDIR)
-        notify(VERSION ": firmware %s uses an experimental way to add games. Back up your save data and "
-                       "report any problem with the log.",
+        notify(VERSION " running (firmware %s: games are added one at a time). Panel in the Media tab or "
+                       "http://<PS5 IP>:8770",
                g_fw_text);
     else
         notify(VERSION ": firmware %s is not supported yet. To protect the system database, no games are added.",
