@@ -952,48 +952,95 @@ static void enforce_patch_sfo(title_src_t *t) {
     free(sfo);
 }
 
-/* Firmware with the system registration (sceAppInstUtilAppInstallAll) PS4Mount relies on.
- * On older firmwares (5.50 was reported) that call makes the system check its whole app
- * database and flag it as corrupted, so PS4Mount does not add games there. */
-#ifndef MIN_FW_MAJOR
-#define MIN_FW_MAJOR 12
+/* How titles are registered by the system, chosen from the firmware at startup:
+ *   REG_ALL      sceAppInstUtilAppInstallAll: the system registers every new title under
+ *                /user/app. Used from 6.00 on (works on 6.50 and 13.20).
+ *   REG_TITLEDIR sceAppInstUtilAppInstallTitleDir, one title at a time (experimental). On
+ *                5.50 InstallAll made the system check its whole app database and flag it
+ *                as corrupted; below 6.00 the per-title call is used when the firmware has
+ *                it (it was removed in newer firmwares: not present on 13.20).
+ *   REG_NONE     neither is safe or available: no games are added. */
+#ifndef MIN_FW_INSTALL_ALL
+#define MIN_FW_INSTALL_ALL 6
 #endif
 
-static int g_fw_supported = 1;
+enum { REG_ALL, REG_TITLEDIR, REG_NONE };
+
+typedef int (*title_dir_fn)(const char *title_id, const char *dir, void *reserved);
+
+static int g_reg_mode = REG_ALL;
+static title_dir_fn g_title_dir;
 static char g_fw_text[16] = "unknown";
+
+static const char *reg_mode_name(void) {
+    return g_reg_mode == REG_ALL ? "AppInstallAll" : g_reg_mode == REG_TITLEDIR ? "AppInstallTitleDir (experimental)" : "none";
+}
 
 static void check_firmware(void) {
     uint32_t fw = kernel_get_fw_version();
     unsigned major = ((fw >> 28) & 0xf) * 10 + ((fw >> 24) & 0xf), minor = ((fw >> 20) & 0xf) * 10 + ((fw >> 16) & 0xf);
     snprintf(g_fw_text, sizeof(g_fw_text), "%u.%02u", major, minor);
-    g_fw_supported = major >= MIN_FW_MAJOR;
-    printf("[main] firmware %s (0x%08x)%s\n", g_fw_text, fw, g_fw_supported ? "" : ": not supported, no games are added");
+    /* looked up at runtime: linking it would stop the payload from loading where it is gone */
+    uint32_t h = 0;
+    if (!kernel_dynlib_handle(getpid(), "libSceAppInstUtil.sprx", &h))
+        g_title_dir = (title_dir_fn)kernel_dynlib_dlsym(getpid(), h, "sceAppInstUtilAppInstallTitleDir");
+    if (major >= MIN_FW_INSTALL_ALL)
+        g_reg_mode = REG_ALL;
+    else
+        g_reg_mode = g_title_dir ? REG_TITLEDIR : REG_NONE;
+    printf("[main] firmware %s (0x%08x), AppInstallTitleDir %s, registration: %s\n", g_fw_text, fw,
+           g_title_dir ? "present" : "missing", reg_mode_name());
 }
 
-/* sceAppInstUtilAppInstallAll runs in its own thread: after rest mode it was seen to
- * block for good, which froze the whole daemon (panel, klog, stop request). A call
- * still running is never doubled; titles keep being checked in the database. */
+/* The system registration runs in its own thread: after rest mode InstallAll was seen to
+ * block for good, which froze the whole daemon (panel, klog, stop request). A call still
+ * running is never doubled; titles keep being checked in the database. */
 static volatile int g_install_busy, g_install_rc;
+static char g_install_tids[MAX_TITLES][10];
+static int g_install_n;
+
+static int register_call(const char *tid) {
+    if (g_reg_mode == REG_TITLEDIR) {
+        int rc = g_title_dir(tid, "/user/app/", NULL);
+        printf("[reg] %s: AppInstallTitleDir=0x%08x\n", tid, rc);
+        return rc == (int)0x80990002 ? 0 : rc; /* 0x80990002: already known, restored */
+    }
+    return sceAppInstUtilAppInstallAll(NULL);
+}
 
 static void *install_thread(void *arg) {
     (void)arg;
-    g_install_rc = sceAppInstUtilAppInstallAll(NULL);
+    int rc = 0;
+    if (g_reg_mode == REG_TITLEDIR) {
+        for (int i = 0; i < g_install_n; i++) {
+            int r = register_call(g_install_tids[i]);
+            if (r)
+                rc = r;
+        }
+    } else {
+        rc = register_call(NULL);
+    }
+    g_install_rc = rc;
     g_install_busy = 0;
     return NULL;
 }
 
-static int install_all_start(void) {
-    if (!g_fw_supported)
-        return -1; /* never on firmwares where it corrupts the database */
+/* Registers the titles of tids that are not registered yet. */
+static int install_all_start(char (*tids)[10], int n) {
+    if (g_reg_mode == REG_NONE)
+        return -1; /* never where it corrupts the database */
     if (g_install_busy) {
-        printf("[reg] AppInstallAll still running from an earlier call\n");
+        printf("[reg] registration still running from an earlier call\n");
         return -1;
     }
+    g_install_n = 0;
+    for (int i = 0; i < n && g_install_n < MAX_TITLES; i++)
+        if (!db_is_registered(tids[i]))
+            snprintf(g_install_tids[g_install_n++], 10, "%s", tids[i]);
     g_install_busy = 1;
     pthread_t th;
     if (pthread_create(&th, NULL, install_thread, NULL)) {
-        g_install_busy = 0;
-        g_install_rc = sceAppInstUtilAppInstallAll(NULL); /* no thread: call it here */
+        install_thread(NULL); /* no thread: call it here */
         return 0;
     }
     pthread_detach(th);
@@ -1046,7 +1093,7 @@ static void install_all(char (*tids)[10], int n) {
         need += !db_is_registered(tids[i]);
     if (!need)
         return;
-    install_all_start();
+    install_all_start(tids, n);
     int done = n - need, idle = 0;
     while (done < n && idle < 30) {
         pump_events(1000);
@@ -1056,7 +1103,7 @@ static void install_all(char (*tids)[10], int n) {
         idle = now > done ? 0 : idle + 1;
         done = now;
     }
-    printf("[reg] AppInstallAll=%s0x%08x: %d of %d title(s) registered\n", g_install_busy ? "(still running) " : "",
+    printf("[reg] %s=%s0x%08x: %d of %d title(s) registered\n", reg_mode_name(), g_install_busy ? "(still running) " : "",
            g_install_rc, done, n);
 }
 
@@ -2550,7 +2597,7 @@ static void install_panel_shortcut(void) {
         printf("[panel] shortcut files: %s\n", strerror(errno));
         return;
     }
-    rc = sceAppInstUtilAppInstallAll(NULL);
+    rc = register_call(PANEL_ID);
     printf("[panel] shortcut install rc=0x%08x\n", rc);
     if (!rc)
         notify("PS4Mount added to the Media tab");
@@ -2662,16 +2709,19 @@ int main(void) {
     config_load();
     signal(SIGPIPE, SIG_IGN);
     check_firmware();
-    if (g_fw_supported)
-        install_panel_shortcut(); /* also registered through AppInstallAll */
+    if (g_reg_mode != REG_NONE)
+        install_panel_shortcut(); /* registered by the system like the games */
     g_web = web_listen();
-    if (g_fw_supported)
+    if (g_reg_mode == REG_ALL)
         notify(g_web >= 0 ? VERSION " running. Panel in the Media tab or http://<PS5 IP>:8770"
                           : VERSION " running (panel unavailable)");
+    else if (g_reg_mode == REG_TITLEDIR)
+        notify(VERSION ": firmware %s uses an experimental way to add games. Back up your save data and "
+                       "report any problem with the log.",
+               g_fw_text);
     else
-        notify(VERSION ": firmware %s is not supported yet (%d.00 or newer is needed). To protect the system "
-                       "database, no games are added.",
-               g_fw_text, MIN_FW_MAJOR);
+        notify(VERSION ": firmware %s is not supported yet. To protect the system database, no games are added.",
+               g_fw_text);
     unlink(STATE_DIR "/stop");
     for (;;) {
         if (g_stop || exists(STATE_DIR "/stop")) {
@@ -2707,7 +2757,7 @@ int main(void) {
             continue;
         }
         if (time(NULL) >= g_next_scan && !g_deleting) {
-            if (g_fw_supported)
+            if (g_reg_mode != REG_NONE)
                 scan_all();
             else if (g_manual_scan)
                 notify("Firmware %s is not supported yet: no games are added", g_fw_text);
