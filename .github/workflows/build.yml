@@ -47,6 +47,9 @@ jobs:
             exit 1
           fi
 
+      - name: Unit tests
+        run: bash test/run.sh
+
       - name: Build
         run: PS5_PAYLOAD_SDK="$HOME/ps5-payload-sdk" bash build.sh
 

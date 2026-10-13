@@ -192,6 +192,15 @@ Requirements: the [PS5 Payload SDK](https://github.com/ps5-payload-dev/sdk) in `
 ./build.sh          # builds build/ps4mount.elf
 ```
 
+Unit tests (crypto, the generated install files and the `param.sfo` parser) run on the computer, with
+no console or SDK:
+
+```sh
+bash test/run.sh
+```
+
+GitHub Actions runs them before every build.
+
 Optional tools:
 
 ```sh
@@ -224,6 +233,7 @@ release with `ps4mount.elf` and its SHA-256 checksum attached.
 | `src/db.c` | Library rows (`app.db`, `appinfo.db`) |
 | `src/crypto.c` | SHA-256, AES-128-CBC, CRC32C, RSA-2048 |
 | `src/web.c`, `web/index.html` | Web panel |
+| `test/` | Unit tests (`bash test/run.sh`) |
 | `tools/pdb_*_template.bin` | PlayGo record layouts (no title data) |
 | `third_party/sqlite/` | SQLite amalgamation |
 
