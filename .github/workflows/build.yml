@@ -102,4 +102,5 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" ps4mount.elf ps4mount.elf.sha256 \
             --repo "${GITHUB_REPOSITORY}" \
             --title "PS4Mount ${GITHUB_REF_NAME#v}" \
-            --notes-file notes.md
+            --notes-file notes.md \
+            $(case "${GITHUB_REF_NAME}" in *-*) echo --prerelease;; esac)
