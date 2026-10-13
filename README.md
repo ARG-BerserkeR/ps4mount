@@ -138,7 +138,10 @@ To delete the game for good, delete its `/ps4/CUSAxxxxx` folder from the drive o
   of the game pkg (for example 01.00). The game runs with the update; the web panel shows its version.
 - Games already installed the normal way on the console are never touched, and their add-ons on the
   drive are not installed.
-- Rest mode powers the drive off. The games stay in the library and work again after waking up.
+- **Close PS4Mount games before putting the console in rest mode.** Rest mode powers the drive off, and a
+  game left open cannot read its files from the drive after waking up: it locks up, and closing it can
+  hang on the "Closing" screen, which needs a console restart. Games that were not open stay in the
+  library and work normally after waking up.
 - **Games with more than about 29 add-ons:** while a game runs, the console mounts each of its packages (the game,
   the update and every add-on) with two virtual devices: a PS4 package holds an outer filesystem with the
   real content as a second filesystem inside it. The console has 64 of these devices, so a running game
