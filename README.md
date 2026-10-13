@@ -102,6 +102,8 @@ Buttons:
 
 ### Settings
 
+![PS4Mount settings](docs/settings.png)
+
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | Folders to search for pkgs | `/` | Folders, relative to each drive, where new `.pkg` files are picked up (one per line). `/` is the root. The `ps4` folder cannot be used: it holds the games already moved. |
