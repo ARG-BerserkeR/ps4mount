@@ -137,7 +137,7 @@ To delete the game for good, delete its `/ps4/CUSAxxxxx` folder from the drive o
 - Games already installed the normal way on the console are never touched, and their add-ons on the
   drive are not installed.
 - Rest mode powers the drive off. The games stay in the library and work again after waking up.
-- **Games with very many add-ons:** while a game runs, the console mounts each of its packages (the game,
+- **Games with more than about 29 add-ons:** while a game runs, the console mounts each of its packages (the game,
   the update and every add-on) with two virtual devices: a PS4 package holds an outer filesystem with the
   real content as a second filesystem inside it. The console has 64 of these devices, so a running game
   can use at most about 30 packages: the game, its update and roughly 29 add-ons. A game with more
