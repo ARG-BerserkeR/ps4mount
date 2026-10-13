@@ -1,5 +1,15 @@
 # PS4Mount
 
+> [!CAUTION]
+> **PS4Mount is a work in progress. Use it at your own risk.**
+>
+> On some consoles and firmwares it can still make the system report that its **database is
+> corrupted**. When that happens the console rebuilds its database on the next start, games added by
+> PS4Mount can disappear from the library until PS4Mount runs again, and you may have to restart the
+> console to get out of repeated error prompts. A forced restart can lose data that was not saved yet.
+> **Back up your save data** (PS Plus cloud storage or a USB drive) before using PS4Mount, and
+> [report any problem](#reporting-problems) with the log.
+
 Play PS4 fake PKGs on a jailbroken PS5 straight from a USB drive, without installing them.
 
 Put the game (and its update) `.pkg` files on a USB drive, plug it in and load `ps4mount.elf`.
