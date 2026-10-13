@@ -71,9 +71,29 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # all tags and commits, for the notes
+
       - uses: actions/download-artifact@v4
         with:
           name: ps4mount
+
+      - name: Release notes from the commits since the previous release
+        run: |
+          prev=$(git describe --tags --abbrev=0 --match 'v*' "${GITHUB_REF_NAME}^" 2>/dev/null || true)
+          {
+            echo "## Changes"
+            echo
+            if [ -n "$prev" ]; then
+              git log --no-merges --reverse --format='- %s' "${prev}..${GITHUB_REF_NAME}" | grep -v '^- Version '
+              echo
+              echo "**Full Changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${prev}...${GITHUB_REF_NAME}"
+            else
+              git log --no-merges --reverse --format='- %s' "${GITHUB_REF_NAME}" | grep -v '^- Version '
+            fi
+          } > notes.md
+          cat notes.md
 
       - name: Publish release
         env:
@@ -82,4 +102,4 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" ps4mount.elf ps4mount.elf.sha256 \
             --repo "${GITHUB_REPOSITORY}" \
             --title "PS4Mount ${GITHUB_REF_NAME#v}" \
-            --generate-notes
+            --notes-file notes.md
