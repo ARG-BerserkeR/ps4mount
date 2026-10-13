@@ -16,6 +16,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -631,6 +632,34 @@ static void enforce_patch_sfo(title_src_t *t) {
     free(sfo);
 }
 
+/* sceAppInstUtilAppInstallAll runs in its own thread: after rest mode it was seen to
+ * block for good, which froze the whole daemon (panel, klog, stop request). A call
+ * still running is never doubled; titles keep being checked in the database. */
+static volatile int g_install_busy, g_install_rc;
+
+static void *install_thread(void *arg) {
+    (void)arg;
+    g_install_rc = sceAppInstUtilAppInstallAll(NULL);
+    g_install_busy = 0;
+    return NULL;
+}
+
+static int install_all_start(void) {
+    if (g_install_busy) {
+        printf("[reg] AppInstallAll still running from an earlier call\n");
+        return -1;
+    }
+    g_install_busy = 1;
+    pthread_t th;
+    if (pthread_create(&th, NULL, install_thread, NULL)) {
+        g_install_busy = 0;
+        g_install_rc = sceAppInstUtilAppInstallAll(NULL); /* no thread: call it here */
+        return 0;
+    }
+    pthread_detach(th);
+    return 0;
+}
+
 static int register_title(title_src_t *t) {
     const char *tid = t->app.title_id;
     if (place_files(t) || mount_title(t))
@@ -639,11 +668,12 @@ static int register_title(title_src_t *t) {
     /* New title: let ShellCore register everything under /user/app itself.
      * That path also refreshes the home screen and fetches the PSN concept. */
     if (!db_is_registered(tid)) {
-        int rc = sceAppInstUtilAppInstallAll(NULL);
+        install_all_start();
         /* the icon shows up before the rows land: keep serving klog/panel meanwhile */
         for (int i = 0; i < 30 && !db_is_registered(tid); i++)
             pump_events(1000);
-        printf("[reg] %s: AppInstallAll=0x%08x registered=%d\n", tid, rc, db_is_registered(tid));
+        printf("[reg] %s: AppInstallAll=%s0x%08x registered=%d\n", tid, g_install_busy ? "(still running) " : "",
+               g_install_rc, db_is_registered(tid));
     }
     /* The system databases are only ever written by the system: ShellCore keeps them
      * open with its own cache, and rows written from outside make it flag app.db as
