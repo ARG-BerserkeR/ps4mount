@@ -32,8 +32,12 @@ main{padding:20px;max-width:1400px;margin:0 auto}
 .actions{display:flex;gap:8px;padding:0 14px 14px;flex-wrap:wrap}
 .empty{color:var(--muted);text-align:center;padding:60px 0}
 .warn{color:#f0c060;font-size:13px;background:#3a2e12;border:1px solid #5c4818;border-radius:8px;padding:6px 8px;margin-top:4px}
-dialog{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:12px;max-width:min(900px,95vw);width:900px}
+dialog{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:12px;max-width:95vw;max-width:min(900px,95vw);width:900px}
 dialog::backdrop{background:#000a}
+/* browsers without <dialog> (older firmwares): see dialogFallback() */
+dialog.fallback{display:none;position:fixed;top:50%;left:50%;-webkit-transform:translate(-50%,-50%);transform:translate(-50%,-50%);z-index:20;max-height:90vh;overflow:auto;padding:16px;margin:0}
+dialog.fallback[open]{display:block}
+#dlg-backdrop{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.65);z-index:19}
 pre{white-space:pre-wrap;font-size:12px;max-height:60vh;overflow:auto;background:#0b0d11;padding:12px;border-radius:8px}
 form.settings{display:flex;flex-direction:column;gap:14px}
 form.settings label{display:flex;flex-direction:column;gap:6px}
@@ -87,6 +91,26 @@ var games = [], busy = {};
 var labels = {ready: 'Ready', running: 'Running', removed: 'Not in library', internal: 'Installed on console', pending: 'Adding', duplicate: 'On another drive'};
 
 function $(id) { return document.getElementById(id); }
+
+/* The browser of older firmwares has no <dialog>: the dialogs then show inside the page and
+   showModal()/close() do not exist. Give them the same behavior with plain CSS. */
+(function dialogFallback() {
+  var dlgs = document.getElementsByTagName('dialog');
+  if (!dlgs.length || typeof dlgs[0].showModal === 'function') return;
+  var backdrop = document.createElement('div');
+  backdrop.id = 'dlg-backdrop';
+  document.body.appendChild(backdrop);
+  for (var i = 0; i < dlgs.length; i++) (function (d) {
+    d.className += ' fallback';
+    d.removeAttribute('open');
+    d.showModal = function () { d.setAttribute('open', ''); backdrop.style.display = 'block'; };
+    d.close = function () { d.removeAttribute('open'); backdrop.style.display = 'none'; };
+    var forms = d.getElementsByTagName('form');
+    for (var j = 0; j < forms.length; j++)
+      if ((forms[j].getAttribute('method') || '').toLowerCase() === 'dialog')
+        forms[j].addEventListener('submit', function (e) { e.preventDefault(); d.close(); });
+  })(dlgs[i]);
+})();
 function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return '&#' + c.charCodeAt(0) + ';'; }); }
 function gb(n) { return (n / 1073741824).toFixed(n >= 10737418240 ? 0 : 1) + ' GB'; }
 function toast(msg) { var t = $('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(function () { t.style.display = 'none'; }, 4000); }
