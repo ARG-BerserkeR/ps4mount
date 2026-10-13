@@ -950,6 +950,24 @@ static void enforce_patch_sfo(title_src_t *t) {
     free(sfo);
 }
 
+/* Firmware with the system registration (sceAppInstUtilAppInstallAll) PS4Mount relies on.
+ * On older firmwares (5.50 was reported) that call makes the system check its whole app
+ * database and flag it as corrupted, so PS4Mount does not add games there. */
+#ifndef MIN_FW_MAJOR
+#define MIN_FW_MAJOR 12
+#endif
+
+static int g_fw_supported = 1;
+static char g_fw_text[16] = "unknown";
+
+static void check_firmware(void) {
+    uint32_t fw = kernel_get_fw_version();
+    unsigned major = ((fw >> 28) & 0xf) * 10 + ((fw >> 24) & 0xf), minor = ((fw >> 20) & 0xf) * 10 + ((fw >> 16) & 0xf);
+    snprintf(g_fw_text, sizeof(g_fw_text), "%u.%02u", major, minor);
+    g_fw_supported = major >= MIN_FW_MAJOR;
+    printf("[main] firmware %s (0x%08x)%s\n", g_fw_text, fw, g_fw_supported ? "" : ": not supported, no games are added");
+}
+
 /* sceAppInstUtilAppInstallAll runs in its own thread: after rest mode it was seen to
  * block for good, which froze the whole daemon (panel, klog, stop request). A call
  * still running is never doubled; titles keep being checked in the database. */
@@ -963,6 +981,8 @@ static void *install_thread(void *arg) {
 }
 
 static int install_all_start(void) {
+    if (!g_fw_supported)
+        return -1; /* never on firmwares where it corrupts the database */
     if (g_install_busy) {
         printf("[reg] AppInstallAll still running from an earlier call\n");
         return -1;
@@ -2323,9 +2343,17 @@ int main(void) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     config_load();
     signal(SIGPIPE, SIG_IGN);
-    install_panel_shortcut();
+    check_firmware();
+    if (g_fw_supported)
+        install_panel_shortcut(); /* also registered through AppInstallAll */
     g_web = web_listen();
-    notify(g_web >= 0 ? VERSION " running. Panel in the Media tab or http://<PS5 IP>:8770" : VERSION " running (panel unavailable)");
+    if (g_fw_supported)
+        notify(g_web >= 0 ? VERSION " running. Panel in the Media tab or http://<PS5 IP>:8770"
+                          : VERSION " running (panel unavailable)");
+    else
+        notify(VERSION ": firmware %s is not supported yet (%d.00 or newer is needed). To protect the system "
+                       "database, no games are added.",
+               g_fw_text, MIN_FW_MAJOR);
     unlink(STATE_DIR "/stop");
     for (;;) {
         if (g_stop || exists(STATE_DIR "/stop")) {
@@ -2355,7 +2383,11 @@ int main(void) {
         if (g_deleting && time(NULL) - g_deleting_since > 600)
             end_delete_window(); /* the line of the screen change was missed */
         if (time(NULL) >= g_next_scan && !g_deleting) {
-            scan_all();
+            if (g_fw_supported)
+                scan_all();
+            else if (g_manual_scan)
+                notify("Firmware %s is not supported yet: no games are added", g_fw_text);
+            g_manual_scan = 0;
             g_next_scan = time(NULL) + SCAN_SECONDS;
         }
         pump_events(1000);
