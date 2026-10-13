@@ -2086,6 +2086,44 @@ int app_add(const char *tid, char *msg, size_t cap) {
     return 0;
 }
 
+/* sceAppInstUtilAppUnInstall in its own thread, waited for at most UNINSTALL_WAIT seconds:
+ * a call that never returns (as InstallAll did after rest mode) must not freeze PS4Mount.
+ * The wait does not serve the panel (this also runs from a panel request). */
+#define UNINSTALL_WAIT 60
+
+static volatile int g_uninstall_busy, g_uninstall_rc;
+static char g_uninstall_tid[10];
+
+static void *uninstall_thread(void *arg) {
+    (void)arg;
+    g_uninstall_rc = sceAppInstUtilAppUnInstall(g_uninstall_tid);
+    g_uninstall_busy = 0;
+    return NULL;
+}
+
+/* 0 or the system error; -2 while an earlier call is still running or this one timed out. */
+static int uninstall_title(const char *tid) {
+    if (g_uninstall_busy) {
+        printf("[remove] %s: an earlier uninstall (%s) is still running\n", tid, g_uninstall_tid);
+        return -2;
+    }
+    snprintf(g_uninstall_tid, sizeof(g_uninstall_tid), "%s", tid);
+    g_uninstall_busy = 1;
+    pthread_t th;
+    if (pthread_create(&th, NULL, uninstall_thread, NULL)) {
+        uninstall_thread(NULL);
+        return g_uninstall_rc;
+    }
+    pthread_detach(th);
+    for (int i = 0; i < UNINSTALL_WAIT * 10 && g_uninstall_busy; i++)
+        usleep(100000);
+    if (g_uninstall_busy) {
+        printf("[remove] %s: uninstall did not return within %d s\n", tid, UNINSTALL_WAIT);
+        return -2;
+    }
+    return g_uninstall_rc;
+}
+
 int app_remove(const char *tid, char *msg, size_t cap) {
     managed_t *m = managed_by(tid, NULL);
     if ((m && m->running) || title_running(tid)) {
@@ -2110,11 +2148,15 @@ int app_remove(const char *tid, char *msg, size_t cap) {
     write_file(path, tid, strlen(tid), 0666);
     snprintf(path, sizeof(path), STATE_DIR "/%s.src", tid);
     unlink(path);
-    int rc = db_is_registered(tid) ? sceAppInstUtilAppUnInstall(tid) : 0;
+    int rc = db_is_registered(tid) ? uninstall_title(tid) : 0;
     if (m)
         m->used = 0;
     printf("[web] remove %s: uninstall=0x%08x\n", tid, rc);
-    snprintf(msg, cap, rc ? "Failed to remove %s (0x%08x)" : "%s removed from the library. The pkg stays on the USB drive.", tid, rc);
+    if (rc == -2)
+        snprintf(msg, cap, "The system did not finish removing %s yet; try again in a moment", tid);
+    else
+        snprintf(msg, cap, rc ? "Failed to remove %s (0x%08x)" : "%s removed from the library. The pkg stays on the USB drive.",
+                 tid, rc);
     return rc ? -1 : 0;
 }
 
@@ -2353,7 +2395,8 @@ static void run_restore(const char *only) {
                 kept++;
                 continue;
             }
-            pump_events(200);
+            /* one removal at a time: the next waits until the system databases are idle */
+            wait_db_quiet(3, 30);
             restore_files(items[k].root, items[k].tid, items[k].name, &moved, &failed);
             done++;
         }
