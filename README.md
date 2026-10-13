@@ -94,6 +94,8 @@ the same network. The panel shows every game found on the connected drives, with
 Buttons:
 
 - **Remove from library**: removes the game from the home screen. The `.pkg` stays on the drive.
+- **Move pkgs back**: removes the game from the library and moves its `.pkg` files back to where they
+  came from (see [Moving pkgs back](#moving-pkgs-back)).
 - **Add to library**: adds a removed game back.
 - **Scan for games**: checks the drives now and shows how many games were found on each one.
 - **Settings**: see below.
@@ -111,6 +113,8 @@ Buttons:
 | Games per group | 5 | Size of each group (1 to 50). |
 | Install add-ons (DLC) | On | Moves and installs add-on `.pkg` files. When off, add-ons are left where they are. |
 
+The settings also have **Move all games back** and **Pick up moved-back pkgs again** (see below).
+
 Settings are saved in `/data/ps4mount/config.txt`.
 
 The panel has no password. Anyone on your local network can open it.
@@ -123,6 +127,25 @@ drive. A removed game comes back
 when you reconnect the drive or click **Add to library**.
 
 To delete the game for good, delete its `/ps4/CUSAxxxxx` folder from the drive on a computer.
+
+### Moving pkgs back
+
+PS4Mount records where every `.pkg` came from in `ps4/CUSAxxxxx/origin.txt` on the drive: the folder
+(any of the scan folders) and the original file name. **Move pkgs back** on a game, or **Move all games
+back** in the settings, undoes the move:
+
+- The game leaves the library (several games are handled in groups, like when adding).
+- The game, its update, older updates kept aside and its add-ons go back to their original folder with
+  their original name. A folder that no longer exists is created again, and an existing file is never
+  replaced: ` (1)` is added to the name.
+- `.pkg` files moved by versions before 0.5.0 have no record and go to the drive root as
+  `CUSAxxxxx - <game> - game.pkg`, `... - update.pkg` and `... - <add-on label>.pkg`.
+- The files PS4Mount created for the game are removed. Folders are only removed when empty, and no
+  `.pkg` is ever deleted.
+
+The `.pkg` files moved back stay where they are on the next scans (they are listed in
+`/data/ps4mount/restored.txt`). To add them again, use **Pick up moved-back pkgs again** in the
+settings. A `.pkg` you move, rename or replace yourself is picked up as usual.
 
 ## Good to know
 
