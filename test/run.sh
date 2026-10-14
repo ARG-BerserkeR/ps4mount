@@ -2,7 +2,6 @@
 # Builds and runs the host tests (no PS5 or SDK needed): bash test/run.sh
 #   CC=clang              compiler (default: cc)
 #   SANITIZE=1            with AddressSanitizer and UndefinedBehaviorSanitizer
-#   FW_REPORT=<file>      also write the per-firmware table (markdown)
 set -e
 cd "$(dirname "$0")/.."
 B=build/test

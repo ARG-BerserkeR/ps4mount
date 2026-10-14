@@ -52,8 +52,9 @@ jobs:
         run: |
           mkdir -p build/test
           cc -O1 -g -Wall -Wextra -Werror -Isrc -o build/test/fw_sim test/fw_sim.c src/fw.c
-          FW_REPORT=build/test/fw.md build/test/fw_sim
-          cat build/test/fw.md >> "$GITHUB_STEP_SUMMARY"
+          build/test/fw_sim --report > build/test/fw.txt
+          cat build/test/fw.txt
+          sed -n '/^### /,$p' build/test/fw.txt >> "$GITHUB_STEP_SUMMARY"
 
   web:
     name: Web panel (simulated browsers)

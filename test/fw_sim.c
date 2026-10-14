@@ -2,7 +2,7 @@
  * Copyright (C) 2026 gasb07
  * Firmware simulation: the registration method PS4Mount picks on every firmware it could
  * run on, with and without sceAppInstUtilAppInstallTitleDir. Run with: bash test/run.sh
- * With FW_REPORT=<file>, also writes a markdown table of the PS5 releases. */
+ * With --report, also prints a markdown table of the PS5 releases after the results. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -41,7 +41,8 @@ static const char *const k_releases[] = {
     "10.60", "11.00", "11.20", "11.40", "11.60", "12.00", "12.02", "12.20", "12.40", "12.60", "13.00", "13.20",
     NULL};
 
-int main(void) {
+int main(int argc, char **argv) {
+    int report = argc > 1 && !strcmp(argv[1], "--report");
     printf("firmware sweep 0.00 to 99.99\n");
     for (unsigned major = 0; major <= 99; major++)
         for (unsigned minor = 0; minor <= 99; minor++)
@@ -76,8 +77,7 @@ int main(void) {
     CHECK(fw_reg_mode(4, 1) == REG_TITLEDIR, "4.50 with TitleDir");   /* issue #13 */
     CHECK(fw_reg_mode(5, 0) == REG_NONE, "5.50 without TitleDir");
 
-    const char *report = getenv("FW_REPORT");
-    FILE *f = report ? fopen(report, "w") : NULL;
+    FILE *f = report ? stdout : NULL;
     if (f)
         fprintf(f, "### Registration method per firmware\n\n| Firmware | With AppInstallTitleDir | Without it |\n|---|---|---|\n");
     for (int i = 0; k_releases[i]; i++) {
@@ -89,8 +89,6 @@ int main(void) {
         if (f)
             fprintf(f, "| %s | %s | %s |\n", k_releases[i], mode_name(with), mode_name(without));
     }
-    if (f)
-        fclose(f);
 
     printf("%d checks, %d failed\n", g_checks, g_failed);
     return g_failed != 0;

@@ -43,7 +43,7 @@ function page(file, opts) {
 const acorn = require('acorn');
 function scripts(file) {
   const html = fs.readFileSync(W + file, 'utf8'), out = [];
-  html.replace(/<script>([\s\S]*?)<\/script>/g, (m, code) => out.push(code));
+  html.replace(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/gi, (m, code) => out.push(code));
   return out;
 }
 function parses(code, version) {

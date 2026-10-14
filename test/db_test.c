@@ -100,11 +100,22 @@ int main(void) {
                        NULL) == SQLITE_OK);
 
     printf("one read per second\n");
-    exec(w, "INSERT INTO tbl_contentinfo VALUES('CUSA00005','x');");
-    next_second();
-    CHECK(db_is_registered("CUSA00005"));
-    exec(w, "DELETE FROM tbl_contentinfo WHERE titleId='CUSA00005';");
-    CHECK(db_is_registered("CUSA00005")); /* same second: the cached list */
+    /* the delete must land in the same second as the read: a slow disk can push it into the
+     * next one, so the check is tried a few times */
+    int cached = -1;
+    for (int attempt = 0; attempt < 5 && cached < 0; attempt++) {
+        exec(w, "INSERT INTO tbl_contentinfo VALUES('CUSA00005','x');");
+        next_second();
+        time_t t = time(NULL);
+        int first = db_is_registered("CUSA00005");
+        exec(w, "DELETE FROM tbl_contentinfo WHERE titleId='CUSA00005';");
+        int second = db_is_registered("CUSA00005");
+        if (time(NULL) == t) {
+            CHECK(first);
+            cached = second; /* same second: the cached list */
+        }
+    }
+    CHECK(cached == 1);
     next_second();
     CHECK(!db_is_registered("CUSA00005"));
 
