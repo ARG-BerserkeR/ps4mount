@@ -27,6 +27,8 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/select.h>
+#include <sys/sysctl.h>
+#include <sys/user.h>
 #include <sys/uio.h>
 #include <time.h>
 #include <unistd.h>
@@ -66,9 +68,12 @@ typedef struct {
     int dlc;        /* add-ons are moved and installed */
     char paths[MAX_SCAN_PATHS][128]; /* folders searched for pkgs, relative to each drive; "" is the root */
     int npaths;
+    int restore_batch; /* games removed from the library per group when moving pkgs back */
 } config_t;
 
-static config_t g_cfg = {1, 5, 1, {""}, 1};
+#define MAX_RESTORE_BATCH 10
+
+static config_t g_cfg = {1, 5, 1, {""}, 1, 5};
 
 typedef struct { char useless[45]; char message[3075]; } notify_request_t;
 int sceUserServiceInitialize(void *);
@@ -2358,16 +2363,95 @@ static void restore_clear_state(const char *tid) {
     retry_clear(tid);
 }
 
-/* Requests from the panel, run by the main loop: one title, or all of them. */
-static char g_restore_tid[10];
-static int g_restore_all;
+/* Requests from the panel, run by the main loop: some titles, or all of them. */
+static char g_restore_tids[MAX_TITLES][10];
+static int g_restore_n, g_restore_all;
+
+/* --- closing the open game --- */
+
+typedef struct {
+    uint32_t app_id;
+    uint64_t unknown1;
+    char title_id[10];
+    uint32_t app_type;
+    char unknown2[0x36];
+} app_info_t;
+
+int sceKernelGetAppInfo(pid_t pid, app_info_t *info);
+int sceSystemServiceKillApp(uint32_t app_id, int how, int reason, int core_dump);
+
+/* Open games: processes named eboot.bin (PS4 and PS5 games alike). Fills up to max
+ * app ids and title ids, returns how many are open. */
+static int open_games(uint32_t *ids, char (*tids)[10], int max) {
+    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PROC, 0}, n = 0;
+    size_t len = 0;
+    if (sysctl(mib, 4, NULL, &len, NULL, 0) || !len)
+        return 0;
+    len += len / 4; /* processes started meanwhile */
+    uint8_t *buf = malloc(len);
+    if (!buf || sysctl(mib, 4, buf, &len, NULL, 0)) {
+        free(buf);
+        return 0;
+    }
+    for (size_t off = 0; off + sizeof(struct kinfo_proc) <= len;) {
+        struct kinfo_proc *ki = (struct kinfo_proc *)(buf + off);
+        if (ki->ki_structsize < (int)sizeof(*ki) || (size_t)ki->ki_structsize > len - off)
+            break;
+        app_info_t info;
+        memset(&info, 0, sizeof(info));
+        if (!strcmp(ki->ki_comm, "eboot.bin") && !sceKernelGetAppInfo(ki->ki_pid, &info) && info.app_id) {
+            if (n < max) {
+                ids[n] = info.app_id;
+                snprintf(tids[n], 10, "%.9s", info.title_id);
+            }
+            n++;
+        }
+        off += (size_t)ki->ki_structsize;
+    }
+    free(buf);
+    return n;
+}
+
+/* Every pkg operation that takes games out of the library closes the open game first,
+ * whichever it is: a game left open keeps reading pkgs that are being moved. 0 once no
+ * game is open; -1 when one did not close within 30 seconds. */
+static int close_open_games(void) {
+    uint32_t ids[8];
+    char tids[8][10];
+    int n = open_games(ids, tids, 8);
+    if (!n)
+        return 0;
+    for (int i = 0; i < n && i < 8; i++) {
+        managed_t *m = managed_by(tids[i], NULL);
+        notify("Closing %s to move pkgs back", m ? m->name : tids[i]);
+        int rc = sceSystemServiceKillApp(ids[i], -1, 0, 0);
+        printf("[restore] close %s (app 0x%08x): 0x%08x\n", tids[i], ids[i], rc);
+    }
+    char closing[8][10];
+    int nc = n < 8 ? n : 8;
+    memcpy(closing, tids, sizeof(closing[0]) * (size_t)nc);
+    for (int s = 0; s < 30; s++) {
+        pump_events(1000);
+        int mounted = 0;
+        for (int i = 0; i < nc; i++)
+            mounted |= title_running(closing[i]);
+        if (!open_games(ids, tids, 8) && !mounted) {
+            pump_events(2000); /* let the system finish unmounting the game */
+            for (int i = 0; i < MAX_TITLES; i++)
+                g_managed[i].running = 0;
+            return 0;
+        }
+    }
+    return -1;
+}
 
 /* Folders of games on every connected drive (or only tid), with their name. */
 typedef struct {
     char root[32], tid[10], name[128];
 } restore_item_t;
 
-static int restore_collect(const char *only, restore_item_t *items, int max) {
+/* only: n title ids to keep, or NULL for every game. */
+static int restore_collect(char (*only)[10], int nonly, restore_item_t *items, int max) {
     int n = 0;
     for (int i = 0; i < 10 && n < max; i++) {
         char root[32], lib[PATH_MAX];
@@ -2381,7 +2465,12 @@ static int restore_collect(const char *only, restore_item_t *items, int max) {
         DIR *d = opendir(lib);
         struct dirent *e;
         while (d && n < max && (e = readdir(d))) {
-            if (strlen(e->d_name) != 9 || strncmp(e->d_name, "CUSA", 4) || (only && strcmp(only, e->d_name)))
+            if (strlen(e->d_name) != 9 || strncmp(e->d_name, "CUSA", 4))
+                continue;
+            int wanted = !only;
+            for (int k = 0; k < nonly && !wanted; k++)
+                wanted = !strcmp(only[k], e->d_name);
+            if (!wanted)
                 continue;
             restore_item_t *it = &items[n++];
             snprintf(it->root, sizeof(it->root), "%s", root);
@@ -2406,26 +2495,25 @@ static int restore_collect(const char *only, restore_item_t *items, int max) {
     return n;
 }
 
-/* Moves the pkgs of the requested games back, in groups like when adding: the games of
- * a group leave the library, their pkgs are moved, and the next group waits until the
- * system databases are idle. */
-static void run_restore(const char *only) {
+/* Moves the pkgs of the requested games (only, or all when NULL) back, in groups of the
+ * restore setting: the games of a group leave the library one at a time, their pkgs are
+ * moved, and the next group waits until the system databases are idle. */
+static void run_restore(char (*only)[10], int nonly) {
     static restore_item_t items[MAX_TITLES];
-    int n = restore_collect(only, items, MAX_TITLES), moved = 0, failed = 0, done = 0, kept = 0;
-    for (int i = 0; i < n; i++)
-        if (title_running(items[i].tid)) {
-            notify("Close %s before moving its pkgs back", items[i].name);
-            return;
-        }
+    int n = restore_collect(only, nonly, items, MAX_TITLES), moved = 0, failed = 0, done = 0, kept = 0;
     if (!n) {
         notify("No PS4Mount games to move back");
         return;
     }
-    int size = g_cfg.batch && g_cfg.batch_size > 0 ? g_cfg.batch_size : n;
-    if (only)
+    if (close_open_games()) {
+        notify("The open game did not close; no pkgs were moved back");
+        return;
+    }
+    int size = g_cfg.restore_batch;
+    if (n == 1)
         notify("Moving the pkgs of %s back...", items[0].name);
     else
-        notify("Moving the pkgs of %d game(s) back to where they came from...", n);
+        notify("Moving the pkgs of %d game(s) back to where they came from, %d at a time...", n, size);
     for (int i = 0; i < n; i += size) {
         if (i)
             wait_db_quiet(BATCH_QUIET, 120);
@@ -2448,36 +2536,58 @@ static void run_restore(const char *only) {
         restore_clear_state(items[i].tid);
     clear_removed_dlc();
     g_next_scan = 0;
-    if (only && done)
+    if (n == 1 && done)
         notify("%s: %d pkg file(s) moved back%s", items[0].name, moved,
                failed ? ", some could not be moved (see the log)" : "");
-    else if (!only)
+    else if (n > 1)
         notify("%d pkg file(s) of %d game(s) moved back%s%s", moved, done,
                failed ? ", some could not be moved (see the log)" : "",
                kept ? ", some games could not leave the library (see the log)" : "");
 }
 
-int app_restore(const char *tid, char *msg, size_t cap) {
-    if (g_restore_all || g_restore_tid[0]) {
+int app_restore(const char *tids, char *msg, size_t cap) {
+    if (g_restore_all || g_restore_n) {
         snprintf(msg, cap, "Already moving pkgs back, wait for it to finish");
         return -1;
     }
-    if (tid) {
-        char root[32];
+    if (!tids) {
+        g_restore_all = 1;
+        snprintf(msg, cap, "Closing the open game and moving the pkgs of all games back to where they came from");
+        return 0;
+    }
+    int n = 0;
+    for (const char *p = tids; *p;) {
+        size_t len = strcspn(p, ",");
+        char tid[10], root[32];
+        if (len != 9 || strncmp(p, "CUSA", 4) || strspn(p + 4, "0123456789") < 5) {
+            snprintf(msg, cap, "invalid title id: %.20s", p);
+            return -1;
+        }
+        snprintf(tid, sizeof(tid), "%.9s", p);
         if (find_root(tid, root, sizeof(root))) {
             snprintf(msg, cap, "%s is not on any connected drive", tid);
             return -1;
         }
-        if (title_running(tid)) {
-            snprintf(msg, cap, "Close the game first");
-            return -1;
-        }
-        snprintf(g_restore_tid, sizeof(g_restore_tid), "%s", tid);
-        snprintf(msg, cap, "Moving the pkgs of %s back to where they came from", tid);
-        return 0;
+        int dup = 0;
+        for (int i = 0; i < n; i++)
+            dup |= !strcmp(g_restore_tids[i], tid);
+        if (!dup && n < MAX_TITLES)
+            snprintf(g_restore_tids[n++], 10, "%s", tid);
+        p += len;
+        if (*p == ',')
+            p++;
     }
-    g_restore_all = 1;
-    snprintf(msg, cap, "Moving the pkgs of all games back to where they came from");
+    if (!n) {
+        snprintf(msg, cap, "No games selected");
+        return -1;
+    }
+    g_restore_n = n;
+    if (n == 1)
+        snprintf(msg, cap, "Closing the open game and moving the pkgs of %s back to where they came from",
+                 g_restore_tids[0]);
+    else
+        snprintf(msg, cap, "Closing the open game and moving the pkgs of %d games back, %d at a time", n,
+                 g_cfg.restore_batch);
     return 0;
 }
 
@@ -2521,7 +2631,8 @@ static int clean_scan_path(const char *in, char *out, size_t n, char *why, size_
 
 static void config_save(void) {
     buf_t b = {0};
-    buf_printf(&b, "batch=%d\nbatch_size=%d\ndlc=%d\n", g_cfg.batch, g_cfg.batch_size, g_cfg.dlc);
+    buf_printf(&b, "batch=%d\nbatch_size=%d\ndlc=%d\nrestore_batch=%d\n", g_cfg.batch, g_cfg.batch_size, g_cfg.dlc,
+               g_cfg.restore_batch);
     for (int i = 0; i < g_cfg.npaths; i++)
         buf_printf(&b, "path=%s\n", g_cfg.paths[i]);
     write_file(CONFIG_PATH, b.data, b.len, 0666);
@@ -2543,6 +2654,8 @@ static void config_load(void) {
             c.batch_size = atoi(line + 11);
         else if (!strncmp(line, "dlc=", 4))
             c.dlc = atoi(line + 4) != 0;
+        else if (!strncmp(line, "restore_batch=", 14))
+            c.restore_batch = atoi(line + 14);
         else if (!strncmp(line, "path=", 5) && c.npaths < MAX_SCAN_PATHS &&
                  !clean_scan_path(line + 5, path, sizeof(path), why, sizeof(why)))
             snprintf(c.paths[c.npaths++], sizeof(c.paths[0]), "%s", path);
@@ -2550,16 +2663,19 @@ static void config_load(void) {
     fclose(f);
     if (c.batch_size < 1 || c.batch_size > 50)
         c.batch_size = 5;
+    if (c.restore_batch < 1 || c.restore_batch > MAX_RESTORE_BATCH)
+        c.restore_batch = 5;
     if (!c.npaths)
         c.npaths = 1; /* the root */
     g_cfg = c;
-    printf("[config] batch=%d batch_size=%d dlc=%d folders=%d\n", g_cfg.batch, g_cfg.batch_size, g_cfg.dlc,
-           g_cfg.npaths);
+    printf("[config] batch=%d batch_size=%d dlc=%d restore_batch=%d folders=%d\n", g_cfg.batch, g_cfg.batch_size,
+           g_cfg.dlc, g_cfg.restore_batch, g_cfg.npaths);
 }
 
 void app_config_json(buf_t *out) {
-    buf_printf(out, "{\"batch\":%s,\"batch_size\":%d,\"dlc\":%s,\"paths\":[", g_cfg.batch ? "true" : "false",
-               g_cfg.batch_size, g_cfg.dlc ? "true" : "false");
+    buf_printf(out, "{\"batch\":%s,\"batch_size\":%d,\"dlc\":%s,\"restore_batch\":%d,\"max_restore_batch\":%d,\"paths\":[",
+               g_cfg.batch ? "true" : "false", g_cfg.batch_size, g_cfg.dlc ? "true" : "false", g_cfg.restore_batch,
+               MAX_RESTORE_BATCH);
     for (int i = 0; i < g_cfg.npaths; i++) {
         char shown[130];
         snprintf(shown, sizeof(shown), "/%s", g_cfg.paths[i]);
@@ -2584,7 +2700,8 @@ static void url_decode(const char *in, size_t len, char *out, size_t n) {
     out[o] = 0;
 }
 
-/* body: batch=0|1&batch_size=N&dlc=0|1&paths=<folders, one per line> (form encoded). */
+/* body: batch=0|1&batch_size=N&dlc=0|1&restore_batch=N&paths=<folders, one per line> (form
+ * encoded); keys left out keep their value. */
 int app_config_set(const char *body, char *msg, size_t cap) {
     config_t c = g_cfg;
     char value[1200], why[160] = "";
@@ -2600,7 +2717,11 @@ int app_config_set(const char *body, char *msg, size_t cap) {
                 c.batch_size = atoi(value);
             else if (k == 3 && !strncmp(p, "dlc", 3))
                 c.dlc = atoi(value) != 0;
-            else if (k == 5 && !strncmp(p, "paths", 5)) {
+            else if (k == 13 && !strncmp(p, "restore_batch", 13)) {
+                char *end;
+                long v = strtol(value, &end, 10);
+                c.restore_batch = *value && !*end ? (int)v : 0;
+            } else if (k == 5 && !strncmp(p, "paths", 5)) {
                 c.npaths = 0;
                 for (char *line = strtok(value, "\n"); line; line = strtok(NULL, "\n")) {
                     char path[128];
@@ -2627,13 +2748,19 @@ int app_config_set(const char *body, char *msg, size_t cap) {
         snprintf(msg, cap, "Not saved: games per group must be between 1 and 50");
         return -1;
     }
+    if (c.restore_batch < 1 || c.restore_batch > MAX_RESTORE_BATCH) {
+        snprintf(msg, cap, "Not saved: games per group when moving back must be a number from 1 to %d",
+                 MAX_RESTORE_BATCH);
+        return -1;
+    }
     if (!c.npaths) {
         snprintf(msg, cap, "Not saved: add at least one folder (/ is the drive root)");
         return -1;
     }
     g_cfg = c;
     config_save();
-    printf("[config] saved: batch=%d batch_size=%d dlc=%d folders=%d\n", c.batch, c.batch_size, c.dlc, c.npaths);
+    printf("[config] saved: batch=%d batch_size=%d dlc=%d restore_batch=%d folders=%d\n", c.batch, c.batch_size, c.dlc,
+           c.restore_batch, c.npaths);
     g_next_scan = 0;
     snprintf(msg, cap, "Settings saved");
     return 0;
@@ -2839,9 +2966,9 @@ int main(void) {
             end_delete_window();
         if (g_deleting && time(NULL) - g_deleting_since > 600)
             end_delete_window(); /* the line of the screen change was missed */
-        if (g_restore_tid[0] || g_restore_all) {
-            run_restore(g_restore_all ? NULL : g_restore_tid);
-            g_restore_tid[0] = 0;
+        if (g_restore_n || g_restore_all) {
+            run_restore(g_restore_all ? NULL : g_restore_tids, g_restore_n);
+            g_restore_n = 0;
             g_restore_all = 0;
             continue;
         }

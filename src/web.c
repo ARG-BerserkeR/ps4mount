@@ -145,6 +145,8 @@ void web_serve(int listen_fd) {
 
     if (!strcmp(path, "/") || !strcmp(path, "/index.html")) {
         reply(fd, "200 OK", "text/html; charset=utf-8", index_html, sizeof(index_html));
+    } else if (!strcmp(path, "/legacy") || !strcmp(path, "/legacy.html")) {
+        reply(fd, "200 OK", "text/html; charset=utf-8", legacy_html, sizeof(legacy_html));
     } else if (!strcmp(path, "/api/games")) {
         buf_t b = {0};
         app_games_json(&b);
@@ -176,11 +178,25 @@ void web_serve(int listen_fd) {
         app_rescan();
         json_msg(fd, 1, "Scanning USB drives for games");
     } else if (post && !strncmp(path, "/api/restore", 12) && (path[12] == 0 || path[12] == '?')) {
+        /* ?title_id=<one game>, body title_ids=<games, comma separated>, or neither for all */
         int rc;
+        const char *list = strstr(body, "title_ids=");
         if (strstr(path, "title_id="))
             rc = title_param(path, tid) ? (snprintf(msg, sizeof(msg), "invalid title_id"), -1)
                                         : app_restore(tid, msg, sizeof(msg));
-        else
+        else if (list) {
+            char tids[4096];
+            size_t o = 0;
+            for (const char *c = list + 10; *c && *c != '&' && o + 1 < sizeof(tids); c++) {
+                if (!strncmp(c, "%2C", 3) || !strncmp(c, "%2c", 3)) {
+                    tids[o++] = ',';
+                    c += 2;
+                } else
+                    tids[o++] = *c;
+            }
+            tids[o] = 0;
+            rc = app_restore(tids, msg, sizeof(msg));
+        } else
             rc = app_restore(NULL, msg, sizeof(msg));
         json_msg(fd, !rc, msg);
     } else if (post && !strcmp(path, "/api/restored/forget")) {

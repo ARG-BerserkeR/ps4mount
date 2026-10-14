@@ -13,8 +13,9 @@ int app_add(const char *tid, char *msg, size_t cap);
 int app_remove(const char *tid, char *msg, size_t cap);
 void app_rescan(void);
 void app_stop(void);
-/* Moves the pkgs of one game (tid) or of all games (NULL) back to where they came from. */
-int app_restore(const char *tid, char *msg, size_t cap);
+/* Closes the open game and moves the pkgs of the games in tids (comma separated title ids)
+ * or of all games (NULL) back to where they came from. */
+int app_restore(const char *tids, char *msg, size_t cap);
 /* Forgets the pkgs moved back, so the scan picks them up again. */
 int app_restored_forget(char *msg, size_t cap);
 void app_config_json(buf_t *out);

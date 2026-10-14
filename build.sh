@@ -6,7 +6,10 @@ cd "$(dirname "$0")"
 B=${PS5_PAYLOAD_SDK:-/opt/ps5-payload-sdk}/bin
 mkdir -p build
 # Embedded data: panel page, Media tab icon, playgo record templates.
-(cd web && xxd -i -n index_html index.html) > build/page_data.h
+{
+    (cd web && xxd -i -n index_html index.html)
+    (cd web && xxd -i -n legacy_html legacy.html)
+} > build/page_data.h
 (cd assets && xxd -i -n icon0_png icon0.png) > build/icon_data.h
 {
     (cd tools && xxd -i -n k_pdb_template pdb_app_template.bin)
@@ -17,5 +20,5 @@ mkdir -p build
     -DSQLITE_THREADSAFE=0 -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DEFAULT_MEMSTATUS=0
 $B/prospero-clang -O2 -Wall -Wextra -Ibuild -Ithird_party/sqlite -o build/ps4mount.elf \
     src/main.c src/web.c src/pkg.c src/build.c src/db.c src/origin.c src/crypto.c build/sqlite3.o \
-    -lSceUserService -lSceAppInstUtil -lkernel_sys
+    -lSceUserService -lSceAppInstUtil -lSceSystemService -lkernel_sys
 ls -la build/ps4mount.elf
