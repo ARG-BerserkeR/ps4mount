@@ -110,7 +110,11 @@ uint8_t *pkg_entry(pkg_t *pkg, uint32_t id, size_t *len) {
         pkg_entry_t *e = &pkg->entries[i];
         if (e->id != id)
             continue;
-        size_t padded = (e->size + 15u) & ~15u;
+        /* the size comes from the file: the entries read here (param.sfo, artwork, sound,
+         * PlayGo data) are far smaller, and a bigger one is a damaged pkg */
+        if (e->size > PKG_MAX_ENTRY_SIZE)
+            return NULL;
+        size_t padded = ((size_t)e->size + 15u) & ~(size_t)15u;
         uint8_t *buf = malloc(padded + 1);
         if (!buf || read_at(pkg->fd, buf, padded, e->offset)) {
             free(buf);
@@ -148,9 +152,17 @@ int sfo_parse(const uint8_t *d, size_t len, sfo_t *out) {
             return -1;
         uint16_t kof = le16(ent), fmt = le16(ent + 2);
         uint32_t ln = le32(ent + 4), vof = le32(ent + 12);
+        /* offsets and lengths come from the file: everything must lie inside it */
+        uint64_t key = (uint64_t)ko + kof, val = (uint64_t)dof + vof;
+        if (key >= len || val > len || (fmt == 0x404 ? 4 : ln) > len - val)
+            return -1;
         sfo_item_t *it = &out->items[out->count++];
-        strncpy(it->key, (const char *)d + ko + kof, sizeof(it->key) - 1);
-        const uint8_t *v = d + dof + vof;
+        size_t kl = strnlen((const char *)d + key, len - key);
+        if (kl > sizeof(it->key) - 1)
+            kl = sizeof(it->key) - 1;
+        memcpy(it->key, d + key, kl);
+        it->key[kl] = 0;
+        const uint8_t *v = d + val;
         if (fmt == 0x404) {
             it->is_int = 1;
             it->ival = le32(v);
