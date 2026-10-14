@@ -42,9 +42,9 @@ function page(file, opts) {
 }
 const acorn = require('acorn');
 function scripts(file) {
-  const html = fs.readFileSync(W + file, 'utf8'), out = [];
-  html.replace(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/gi, (m, code) => out.push(code));
-  return out;
+  // parsed as HTML (scripts not run), so the browser's own rules find the script elements
+  const doc = new JSDOM(fs.readFileSync(W + file, 'utf8')).window.document;
+  return Array.from(doc.querySelectorAll('script'), (el) => el.textContent);
 }
 function parses(code, version) {
   try { acorn.parse(code, { ecmaVersion: version }); return ''; } catch (e) { return e.message; }
