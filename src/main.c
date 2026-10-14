@@ -2906,7 +2906,14 @@ int main(void) {
     sceUserServiceInitialize(0);
     sceAppInstUtilInitialize();
     mkdirs(STATE_DIR, 0777);
-    freopen(STATE_DIR "/log.txt", "a", stdout);
+    /* the log goes to a file; when it cannot be opened, stdout stays as it was (a failed
+     * freopen would leave it closed for every later printf) */
+    int log_fd = open(STATE_DIR "/log.txt", O_WRONLY | O_CREAT | O_APPEND, 0666);
+    if (log_fd >= 0) {
+        fflush(stdout);
+        dup2(log_fd, STDOUT_FILENO);
+        close(log_fd);
+    }
     setvbuf(stdout, NULL, _IOLBF, 0);
     config_load();
     signal(SIGPIPE, SIG_IGN);
