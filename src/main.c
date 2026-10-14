@@ -1929,8 +1929,11 @@ static void handle_klog_line(const char *line) {
             rm_tree(hold);
             notify("%s removed from the library. The pkg stays on the USB drive.", m->name);
             m->used = 0;
-        } else if (strlen(id) == 36) {
-            /* an add-on of one of our games: keep it out until the drive is reconnected */
+        } else if (strlen(id) == 36 && g_deleting) {
+            /* an add-on of one of our games deleted on a delete screen: keep it out until the
+             * drive is reconnected. Outside those screens the uninstall is the system's own:
+             * registering a game again uninstalls its add-ons' PlayGo data, and taking that
+             * for a delete removed the add-ons of the game every time a game was added. */
             for (int i = 0; i < MAX_TITLES; i++) {
                 managed_t *g = &g_managed[i];
                 for (int j = 0; g->used && j < g->ndlc_tids; j++) {
