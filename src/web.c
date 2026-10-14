@@ -67,11 +67,8 @@ static void json_msg(int fd, int ok, const char *msg) {
     buf_free(&b);
 }
 
-static int title_param(const char *path, char *tid) {
-    const char *p = strstr(path, "title_id=");
-    if (!p)
-        return -1;
-    p += 9;
+/* A title id (CUSA00000) at p, copied to tid. 0 when valid. */
+static int title_at(const char *p, char *tid) {
     for (int i = 0; i < 9; i++) {
         char c = p[i];
         if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')))
@@ -80,6 +77,11 @@ static int title_param(const char *path, char *tid) {
     }
     tid[9] = 0;
     return strncmp(tid, "CUSA", 4) ? -1 : 0;
+}
+
+static int title_param(const char *path, char *tid) {
+    const char *p = strstr(path, "title_id=");
+    return p ? title_at(p + 9, tid) : -1;
 }
 
 static void send_log(int fd) {
@@ -157,8 +159,8 @@ void web_handle(int fd) {
         buf_free(&b);
     } else if (!strncmp(path, "/icon/", 6)) {
         buf_t b = {0};
-        snprintf(tid, sizeof(tid), "%.9s", path + 6);
-        if (!app_icon(tid, &b))
+        /* the id becomes part of file paths: nothing but a title id */
+        if (strlen(path + 6) == 9 && !title_at(path + 6, tid) && !app_icon(tid, &b))
             reply(fd, "200 OK", "image/png", b.data, b.len);
         else
             reply(fd, "404 Not Found", "text/plain", "no icon\n", 8);
