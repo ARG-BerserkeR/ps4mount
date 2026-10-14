@@ -39,6 +39,7 @@
 #include "crypto.h"
 #include "db.h"
 #include "fw.h"
+#include "logts.h"
 #include "origin.h"
 #include "pkg.h"
 #include "web.h"
@@ -2909,14 +2910,10 @@ int main(void) {
     sceUserServiceInitialize(0);
     sceAppInstUtilInitialize();
     mkdirs(STATE_DIR, 0777);
-    /* the log goes to a file; when it cannot be opened, stdout stays as it was (a failed
-     * freopen would leave it closed for every later printf) */
-    int log_fd = open(STATE_DIR "/log.txt", O_WRONLY | O_CREAT | O_APPEND, 0666);
-    if (log_fd >= 0) {
-        fflush(stdout);
-        dup2(log_fd, STDOUT_FILENO);
-        close(log_fd);
-    }
+    /* the log goes to a file, every line with its time; when it cannot be opened, stdout
+     * stays as it was */
+    if (!log_start(STATE_DIR "/log.txt"))
+        atexit(log_stop); /* the last lines reach the file before the payload exits */
     setvbuf(stdout, NULL, _IOLBF, 0);
     config_load();
     signal(SIGPIPE, SIG_IGN);
