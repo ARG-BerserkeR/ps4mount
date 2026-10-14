@@ -110,7 +110,11 @@ uint8_t *pkg_entry(pkg_t *pkg, uint32_t id, size_t *len) {
         pkg_entry_t *e = &pkg->entries[i];
         if (e->id != id)
             continue;
-        size_t padded = (e->size + 15u) & ~15u;
+        /* the size comes from the file: the entries read here (param.sfo, artwork, sound,
+         * PlayGo data) are far smaller, and a bigger one is a damaged pkg */
+        if (e->size > PKG_MAX_ENTRY_SIZE)
+            return NULL;
+        size_t padded = ((size_t)e->size + 15u) & ~(size_t)15u;
         uint8_t *buf = malloc(padded + 1);
         if (!buf || read_at(pkg->fd, buf, padded, e->offset)) {
             free(buf);
