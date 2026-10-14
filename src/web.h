@@ -27,3 +27,5 @@ int app_icon(const char *tid, buf_t *out);
 int web_listen(void);
 /* Serves one connection on the listening socket. */
 void web_serve(int listen_fd);
+/* Answers the request on a connected socket and closes it. */
+void web_handle(int fd);

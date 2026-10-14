@@ -113,8 +113,11 @@ static void send_log(int fd) {
 
 void web_serve(int listen_fd) {
     int fd = accept(listen_fd, NULL, NULL);
-    if (fd < 0)
-        return;
+    if (fd >= 0)
+        web_handle(fd);
+}
+
+void web_handle(int fd) {
     struct timeval tv = {5, 0};
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     char req[8192];

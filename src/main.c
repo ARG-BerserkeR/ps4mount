@@ -38,6 +38,7 @@
 #include "build.h"
 #include "crypto.h"
 #include "db.h"
+#include "fw.h"
 #include "origin.h"
 #include "pkg.h"
 #include "web.h"
@@ -957,20 +958,7 @@ static void enforce_patch_sfo(title_src_t *t) {
     free(sfo);
 }
 
-/* How titles are registered by the system, chosen from the firmware at startup:
- *   REG_ALL      sceAppInstUtilAppInstallAll: the system registers every new title under
- *                /user/app. Used from 6.00 on (works on 6.50 and 13.20).
- *   REG_TITLEDIR sceAppInstUtilAppInstallTitleDir, one title at a time (works on 5.50). On
- *                5.50 InstallAll made the system check its whole app database and flag it
- *                as corrupted; below 6.00 the per-title call is used when the firmware has
- *                it (it was removed in newer firmwares: not present on 13.20).
- *   REG_NONE     neither is safe or available: no games are added. */
-#ifndef MIN_FW_INSTALL_ALL
-#define MIN_FW_INSTALL_ALL 6
-#endif
-
-enum { REG_ALL, REG_TITLEDIR, REG_NONE };
-
+/* Registration method: see fw.h. */
 typedef int (*title_dir_fn)(const char *title_id, const char *dir, void *reserved);
 
 static int g_reg_mode = REG_ALL;
@@ -983,16 +971,14 @@ static const char *reg_mode_name(void) {
 
 static void check_firmware(void) {
     uint32_t fw = kernel_get_fw_version();
-    unsigned major = ((fw >> 28) & 0xf) * 10 + ((fw >> 24) & 0xf), minor = ((fw >> 20) & 0xf) * 10 + ((fw >> 16) & 0xf);
-    snprintf(g_fw_text, sizeof(g_fw_text), "%u.%02u", major, minor);
+    unsigned major, minor;
+    fw_decode(fw, &major, &minor);
+    fw_text(fw, g_fw_text, sizeof(g_fw_text));
     /* looked up at runtime: linking it would stop the payload from loading where it is gone */
     uint32_t h = 0;
     if (!kernel_dynlib_handle(getpid(), "libSceAppInstUtil.sprx", &h))
         g_title_dir = (title_dir_fn)kernel_dynlib_dlsym(getpid(), h, "sceAppInstUtilAppInstallTitleDir");
-    if (major >= MIN_FW_INSTALL_ALL)
-        g_reg_mode = REG_ALL;
-    else
-        g_reg_mode = g_title_dir ? REG_TITLEDIR : REG_NONE;
+    g_reg_mode = fw_reg_mode(major, g_title_dir != NULL);
     printf("[main] firmware %s (0x%08x), AppInstallTitleDir %s, registration: %s\n", g_fw_text, fw,
            g_title_dir ? "present" : "missing", reg_mode_name());
 }
