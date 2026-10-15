@@ -44,3 +44,7 @@ $CC $FLAGS -Ithird_party/sqlite -DAPP_DB="\"$B/app.db\"" -o "$B/db_test" test/db
 echo "== web panel server"
 $CC $FLAGS -Itest -o "$B/http_test" test/http_test.c test/stubs.c src/web.c src/build.c src/crypto.c -lpthread
 "$B/http_test"
+
+echo "== log with times"
+$CC $FLAGS -o "$B/log_test" test/log_test.c src/logts.c -lpthread
+"$B/log_test"
