@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "logts.h"
@@ -90,6 +91,40 @@ int main(void) {
     CHECK(stamped == n);
     CHECK(first && joined);
     CHECK(last); /* nothing lost at the end */
+
+    fprintf(stderr, "size limit\n");
+    char big[] = "/tmp/ps4mount_log_XXXXXX";
+    fd = mkstemp(big);
+    CHECK(fd >= 0);
+    static char filler[100];
+    memset(filler, 'x', sizeof(filler) - 1);
+    filler[sizeof(filler) - 1] = '\n';
+    for (int i = 0; i < 25000; i++) /* 2.5 MB left by an earlier run */
+        if (write(fd, filler, sizeof(filler)) < 0)
+            break;
+    close(fd);
+    saved = dup(STDOUT_FILENO);
+    CHECK(!log_start(big));
+    setvbuf(stdout, NULL, _IOLBF, 0);
+    struct stat st;
+    CHECK(!stat(big, &st) && st.st_size <= (256 << 10)); /* trimmed when the log starts */
+    for (int i = 0; i < 20000; i++) /* about 1.3 MB more while running */
+        printf("[klog] a line long enough to fill the log quickly, number %d of the test\n", i);
+    log_stop();
+    dup2(saved, STDOUT_FILENO);
+    close(saved);
+    CHECK(!stat(big, &st) && st.st_size <= (1 << 20) + 8192); /* kept under the limit */
+    f = fopen(big, "r");
+    int whole = 1, lines = 0, end = 0;
+    while (f && fgets(line, sizeof(line), f)) {
+        lines++;
+        whole &= matches("^[0-9]{4}-[0-9]{2}-[0-9]{2} ", line); /* starts on a whole line */
+        end |= strstr(line, "number 19999 of the test") != NULL;
+    }
+    if (f)
+        fclose(f);
+    unlink(big);
+    CHECK(lines > 1000 && whole && end); /* still written after the trim, nothing lost at the end */
 
     fprintf(stderr, "%d checks, %d failed\n", g_checks, g_failed);
     return g_failed != 0;

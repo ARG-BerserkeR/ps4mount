@@ -5,10 +5,14 @@
  * gets its time this way. */
 #include "logts.h"
 
+#include "logfile.h"
+
 #include <fcntl.h>
+#include <limits.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -49,7 +53,25 @@ int log_write_lines(int fd, int *at_start, const char *buf, size_t len, const ch
     return 0;
 }
 
+/* log.txt is cut back to its last LOG_KEEP bytes when it grows past LOG_MAX */
+#define LOG_MAX (1 << 20)
+#define LOG_KEEP (256 << 10)
+
 static int g_pipe_read = -1, g_file = -1;
+static char g_path[PATH_MAX];
+
+/* Run by the copy thread, the only writer of the file: trims it and opens the trimmed file.
+ * stdout is not touched, so no other thread can be caught printing. */
+static void limit_size(void) {
+    struct stat st;
+    if (fstat(g_file, &st) || st.st_size <= LOG_MAX || log_trim(g_path, LOG_MAX, LOG_KEEP) != 1)
+        return;
+    int fd = open(g_path, O_WRONLY | O_CREAT | O_APPEND, 0666);
+    if (fd < 0)
+        return; /* keep writing to the old file rather than losing lines */
+    close(g_file);
+    g_file = fd;
+}
 static pthread_t g_thread;
 static int g_running;
 
@@ -61,12 +83,16 @@ static void *copy_thread(void *arg) {
     while ((n = read(g_pipe_read, buf, sizeof(buf))) > 0) {
         log_stamp(stamp, sizeof(stamp));
         log_write_lines(g_file, &at_start, buf, (size_t)n, stamp);
+        if (at_start)
+            limit_size(); /* only between whole lines */
     }
     return NULL;
 }
 
 int log_start(const char *path) {
     int fds[2];
+    snprintf(g_path, sizeof(g_path), "%s", path);
+    log_trim(path, LOG_MAX, LOG_KEEP);
     g_file = open(path, O_WRONLY | O_CREAT | O_APPEND, 0666);
     if (g_file < 0)
         return -1;

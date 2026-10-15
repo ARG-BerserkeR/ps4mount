@@ -50,5 +50,5 @@ $CC $FLAGS -DWEB_PORT=18770 -o "$B/web_unit" test/web_unit.c src/web.c src/build
 "$B/web_unit"
 
 echo "== log with times"
-$CC $FLAGS -o "$B/log_test" test/log_test.c src/logts.c -lpthread
+$CC $FLAGS -o "$B/log_test" test/log_test.c src/logts.c src/logfile.c -lpthread
 "$B/log_test"

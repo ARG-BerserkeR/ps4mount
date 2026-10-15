@@ -39,7 +39,6 @@
 #include "crypto.h"
 #include "db.h"
 #include "fw.h"
-#include "logfile.h"
 #include "logts.h"
 #include "origin.h"
 #include "pkg.h"
@@ -2916,22 +2915,6 @@ static void pump_events(int ms) {
 }
 
 #define LOG_FILE STATE_DIR "/log.txt"
-#define LOG_MAX (1 << 20)   /* log.txt is cut back to its last LOG_KEEP bytes past this size */
-#define LOG_KEEP (256 << 10)
-
-/* Keeps log.txt bounded. */
-static void log_limit(void) {
-    /* The install thread prints to stdout; restarting the logger while it writes is undefined. */
-    if (g_install_busy)
-        return;
-    if (log_trim(LOG_FILE, LOG_MAX, LOG_KEEP) != 1)
-        return;
-    /* log_trim renamed a new file over the log, so the timestamping logger still holds the
-     * old one: start it again on the trimmed file */
-    log_stop();
-    log_start(LOG_FILE);
-    printf("[main] log trimmed to its last %d KB\n", LOG_KEEP >> 10);
-}
 
 int main(void) {
     int lock = single_instance();
@@ -2944,7 +2927,6 @@ int main(void) {
     mkdirs(STATE_DIR, 0777);
     /* the log goes to a file, every line with its time; when it cannot be opened, stdout
      * stays as it was */
-    log_trim(LOG_FILE, LOG_MAX, LOG_KEEP);
     if (!log_start(LOG_FILE))
         atexit(log_stop); /* the last lines reach the file before the payload exits */
     setvbuf(stdout, NULL, _IOLBF, 0);
@@ -3011,7 +2993,6 @@ int main(void) {
             else if (g_manual_scan)
                 notify("Firmware %s is not supported yet: no games are added", g_fw_text);
             g_manual_scan = 0;
-            log_limit();
             g_next_scan = time(NULL) + SCAN_SECONDS;
         }
         pump_events(1000);

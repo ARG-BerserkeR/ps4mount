@@ -5,8 +5,9 @@
 
 #include <stddef.h>
 
-/* Sends stdout to path (appended), each line prefixed with the date and time. 0 on
- * success; on failure stdout is left as it was. */
+/* Sends stdout to path (appended), each line prefixed with the date and time. The file is
+ * kept under 1 MB: past that it is cut back to its last 256 KB, at start and while running.
+ * 0 on success; on failure stdout is left as it was. */
 int log_start(const char *path);
 /* Writes what is still pending and waits for it; safe to call more than once. */
 void log_stop(void);
