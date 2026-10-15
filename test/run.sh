@@ -45,6 +45,10 @@ echo "== web panel server"
 $CC $FLAGS -Itest -o "$B/http_test" test/http_test.c test/stubs.c src/web.c src/build.c src/crypto.c -lpthread
 "$B/http_test"
 
+echo "== web panel from the main loop"
+$CC $FLAGS -DWEB_PORT=18770 -o "$B/web_unit" test/web_unit.c src/web.c src/build.c src/crypto.c src/pkg.c
+"$B/web_unit"
+
 echo "== log with times"
 $CC $FLAGS -o "$B/log_test" test/log_test.c src/logts.c -lpthread
 "$B/log_test"

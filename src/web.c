@@ -11,6 +11,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "page_data.h"
@@ -32,9 +33,14 @@ int web_listen(void) {
     return s;
 }
 
+/* The panel is served from the daemon's main loop: a client that stops reading
+ * (each write may block SO_SNDTIMEO) is dropped after SEND_LIMIT seconds. */
+#define SEND_LIMIT 10
+
 static void send_all(int fd, const void *p, size_t n) {
     const char *c = p;
-    while (n) {
+    time_t start = time(NULL);
+    while (n && time(NULL) - start < SEND_LIMIT) {
         ssize_t w = write(fd, c, n);
         if (w <= 0)
             return;
@@ -120,8 +126,9 @@ void web_serve(int listen_fd) {
 }
 
 void web_handle(int fd) {
-    struct timeval tv = {5, 0};
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    struct timeval rtv = {2, 0}, stv = {3, 0};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rtv, sizeof(rtv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &stv, sizeof(stv));
     char req[8192];
     ssize_t n = read(fd, req, sizeof(req) - 1);
     if (n <= 0) {
