@@ -1419,7 +1419,11 @@ static int adopt_dir_pkgs(const char *root, const char *dir) {
             char old[PATH_MAX];
             snprintf(old, sizeof(old), "%s/ps4/%s/replaced", root, tid);
             mkdirs(old, 0777);
-            snprintf(old, sizeof(old), "%s/ps4/%s/replaced/patch-%ld.pkg", root, tid, (long)time(NULL));
+            long now = (long)time(NULL);
+            struct stat taken;
+            snprintf(old, sizeof(old), "%s/ps4/%s/replaced/patch-%ld.pkg", root, tid, now);
+            for (int k = 2; !stat(old, &taken) && k < 100; k++) /* rename() would replace it */
+                snprintf(old, sizeof(old), "%s/ps4/%s/replaced/patch-%ld-%d.pkg", root, tid, now, k);
             if (rename(dst, old)) {
                 printf("[scan] keep %s aside: %s\n", dst, strerror(errno));
                 continue;
