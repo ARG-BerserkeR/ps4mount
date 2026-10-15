@@ -11,6 +11,7 @@
 #include "build.h"
 #include "crypto.h"
 #include "origin.h"
+#include "logfile.h"
 #include "pkg.h"
 #include "pdb_template.h"
 
@@ -362,6 +363,36 @@ static void test_origin(void) {
     CHECK(system(cmd) == 0);
 }
 
+static size_t file_text(const char *path, char *out, size_t cap) {
+    FILE *f = fopen(path, "rb");
+    size_t n = f ? fread(out, 1, cap - 1, f) : 0;
+    out[n] = 0;
+    if (f)
+        fclose(f);
+    return n;
+}
+
+static void test_log_trim(void) {
+    printf("log trim\n");
+    char path[] = "/tmp/ps4mount-log-XXXXXX", text[256];
+    int fd = mkstemp(path);
+    CHECK(fd >= 0);
+    const char log[] = "line one\nline two\nline three\nline four\n";
+    CHECK(write(fd, log, sizeof(log) - 1) == (ssize_t)(sizeof(log) - 1));
+    close(fd);
+
+    CHECK(log_trim(path, 1000, 20) == 0); /* under the limit: untouched */
+    CHECK(file_text(path, text, sizeof(text)) == sizeof(log) - 1);
+
+    /* over the limit: the end is kept, starting at a whole line */
+    CHECK(log_trim(path, 30, 20) == 1);
+    file_text(path, text, sizeof(text));
+    CHECK(!strcmp(text, "line four\n"));
+    unlink(path);
+
+    CHECK(log_trim("/tmp/ps4mount-no-such-log", 30, 20) == 0);
+}
+
 int main(void) {
     test_crypto();
     test_app_json();
@@ -371,6 +402,7 @@ int main(void) {
     test_sfo();
     test_origin();
     test_pkg_entry();
+    test_log_trim();
     printf("%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
 }
