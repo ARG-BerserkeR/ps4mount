@@ -73,16 +73,19 @@ static void json_msg(int fd, int ok, const char *msg) {
     buf_free(&b);
 }
 
-/* A title id (CUSA00000) at p, copied to tid. 0 when valid. */
+/* A title id (CUSA and 5 digits) at p, ending there or at the next query parameter, copied
+ * to tid. 0 when valid. */
 static int title_at(const char *p, char *tid) {
-    for (int i = 0; i < 9; i++) {
-        char c = p[i];
-        if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')))
+    if (strncmp(p, "CUSA", 4))
+        return -1;
+    for (int i = 4; i < 9; i++)
+        if (p[i] < '0' || p[i] > '9')
             return -1;
-        tid[i] = c;
-    }
+    if (p[9] && p[9] != '&')
+        return -1;
+    memcpy(tid, p, 9);
     tid[9] = 0;
-    return strncmp(tid, "CUSA", 4) ? -1 : 0;
+    return 0;
 }
 
 static int title_param(const char *path, char *tid) {
