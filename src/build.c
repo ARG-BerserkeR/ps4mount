@@ -111,7 +111,7 @@ static int playgo_table(const uint8_t *pg, size_t len, int idx, uint32_t *off, u
         return -1;
     *off = le32(pg + 0xc0 + idx * 8);
     *size = le32(pg + 0xc4 + idx * 8);
-    return *off + *size <= len ? 0 : -1;
+    return (uint64_t)*off + *size <= len ? 0 : -1;
 }
 
 uint16_t playgo_chunk_count(const uint8_t *pg, size_t len) {

@@ -393,6 +393,21 @@ static void test_log_trim(void) {
     CHECK(log_trim("/tmp/ps4mount-no-such-log", 30, 20) == 0);
 }
 
+static void test_playgo_bounds(void) {
+    printf("playgo: table offsets that wrap past 4 GB are refused\n");
+    uint8_t pg[0x100] = {0};
+    memcpy(pg, "plgo", 4);
+    pg[0x0a] = 1;
+    pg[0x0e] = 1;
+    /* scenario table (index 4): offset 0xFFFFFF00 + size 0x200 wraps to 0x100 in 32 bits */
+    uint8_t *e = pg + 0xc0 + 4 * 8;
+    e[0] = 0x00, e[1] = 0xff, e[2] = 0xff, e[3] = 0xff;
+    e[4] = 0x00, e[5] = 0x02;
+    buf_t b = {0};
+    CHECK(build_app_xml(&b, pg, sizeof(pg)) == -1);
+    buf_free(&b);
+}
+
 int main(void) {
     test_crypto();
     test_app_json();
@@ -403,6 +418,7 @@ int main(void) {
     test_origin();
     test_pkg_entry();
     test_log_trim();
+    test_playgo_bounds();
     printf("%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
 }
