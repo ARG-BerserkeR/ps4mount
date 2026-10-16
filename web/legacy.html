@@ -70,7 +70,7 @@ pre{white-space:pre-wrap;font-size:12px;background:#0b0d11;padding:12px;border-r
       <span class="hint">/ is the root of the drive. Games are moved into the ps4 folder, so it cannot be used here.</span>
     </label>
     <label><input type="checkbox" id="s-batch"> Add new games in groups</label>
-    <label>Games per group <input type="text" id="s-size" inputmode="numeric" pattern="[0-9]*" maxlength="2" style="width:6em"></label>
+    <label>Games per group <input type="number" id="s-size" inputmode="numeric" pattern="[0-9]*" min="1" max="50" style="width:6em"></label>
     <label><input type="checkbox" id="s-dlc"> Install add-ons (DLC)</label>
   </div>
   <div class="box">
@@ -78,7 +78,7 @@ pre{white-space:pre-wrap;font-size:12px;background:#0b0d11;padding:12px;border-r
     <span class="hint">Moves the pkgs of a game (game, update and all its add-ons) back to where they came from, with their
       original names, and takes the game out of the library. No pkg is deleted. The open game is closed first.</span>
     <label>Games removed from the library per group (1 to <span id="rmax">10</span>)
-      <input type="text" id="s-rsize" inputmode="numeric" pattern="[0-9]*" maxlength="2" style="width:6em">
+      <input type="number" id="s-rsize" inputmode="numeric" pattern="[0-9]*" min="1" max="10" style="width:6em">
     </label>
     <button class="danger" id="s-restore">Move all games back</button>
     <button id="s-pick">Restore selected games</button>
@@ -226,7 +226,8 @@ $('nav-settings').onclick = function () {
 };
 $('s-batch').onclick = function () { $('s-size').disabled = !this.checked; };
 $('s-cancel').onclick = function () { show('v-games'); };
-/* Number fields: the numeric keyboard on the PS5 and phones (inputmode), digits only, capped at max. */
+/* Number fields: type=number opens the numeric keyboard on the PS5 (inputmode alone does
+ * not), inputmode on phones; digits only, capped at max. */
 function onlyDigits(el, max) {
   /* a key that types anything but a digit never reaches the field (Enter still submits) */
   el.onkeypress = function (e) {
