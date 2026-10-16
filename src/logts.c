@@ -99,7 +99,14 @@ void log_stop(void) {
         return;
     g_running = 0;
     fflush(stdout);
-    close(STDOUT_FILENO); /* the thread reads the rest, then sees the end */
+    /* the thread reads the rest, then sees the end once fd 1 no longer holds the pipe.
+     * The PS5 refuses close(1) (EPERM), which left the thread waiting and the payload
+     * unable to exit: fd 1 is pointed at /dev/null instead. */
+    int null = open("/dev/null", O_WRONLY);
+    if (null < 0 || dup2(null, STDOUT_FILENO) < 0)
+        close(STDOUT_FILENO);
+    if (null > STDOUT_FILENO)
+        close(null);
     pthread_join(g_thread, NULL);
     close(g_pipe_read);
     close(g_file);

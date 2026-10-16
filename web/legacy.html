@@ -70,7 +70,7 @@ pre{white-space:pre-wrap;font-size:12px;background:#0b0d11;padding:12px;border-r
       <span class="hint">/ is the root of the drive. Games are moved into the ps4 folder, so it cannot be used here.</span>
     </label>
     <label><input type="checkbox" id="s-batch"> Add new games in groups</label>
-    <label>Games per group <input type="number" id="s-size" min="1" max="50" style="width:6em"></label>
+    <label>Games per group <input type="number" id="s-size" inputmode="numeric" pattern="[0-9]*" min="1" max="50" style="width:6em"></label>
     <label><input type="checkbox" id="s-dlc"> Install add-ons (DLC)</label>
   </div>
   <div class="box">
@@ -78,7 +78,7 @@ pre{white-space:pre-wrap;font-size:12px;background:#0b0d11;padding:12px;border-r
     <span class="hint">Moves the pkgs of a game (game, update and all its add-ons) back to where they came from, with their
       original names, and takes the game out of the library. No pkg is deleted. The open game is closed first.</span>
     <label>Games removed from the library per group (1 to <span id="rmax">10</span>)
-      <input type="text" id="s-rsize" maxlength="2" style="width:6em">
+      <input type="number" id="s-rsize" inputmode="numeric" pattern="[0-9]*" min="1" max="10" style="width:6em">
     </label>
     <button class="danger" id="s-restore">Move all games back</button>
     <button id="s-pick">Restore selected games</button>
@@ -226,15 +226,27 @@ $('nav-settings').onclick = function () {
 };
 $('s-batch').onclick = function () { $('s-size').disabled = !this.checked; };
 $('s-cancel').onclick = function () { show('v-games'); };
-/* Games per group when moving back: digits only, 1 to maxRestore. */
-function onlyDigits() {
-  var v = this.value.replace(/[^0-9]/g, '');
-  if (v !== '' && +v > maxRestore) v = String(maxRestore);
-  if (v !== this.value) this.value = v;
+/* Number fields: type=number opens the numeric keyboard on the PS5 (inputmode alone does
+ * not), inputmode on phones; digits only, capped at max. */
+function onlyDigits(el, max) {
+  /* a key that types anything but a digit never reaches the field (Enter still submits) */
+  el.onkeypress = function (e) {
+    e = e || window.event;
+    var c = e.charCode || e.keyCode || 0;
+    if (c >= 32 && (c < 48 || c > 57)) {
+      if (e.preventDefault) e.preventDefault();
+      return false;
+    }
+  };
+  el.onkeyup = el.onchange = el.oninput = function () {
+    var v = this.value.replace(/[^0-9]/g, '');
+    if (v !== '' && +v > max()) v = String(max());
+    if (v !== this.value) this.value = v;
+  };
 }
-$('s-rsize').onkeyup = onlyDigits;
-$('s-rsize').onchange = onlyDigits;
-$('s-rsize').oninput = onlyDigits;
+onlyDigits($('s-size'), function () { return 50; });
+onlyDigits($('s-rsize'), function () { return maxRestore; });
+/* Games per group when moving back: digits only, 1 to maxRestore. */
 function restoreSize() {
   var v = $('s-rsize').value;
   if (!/^[0-9]+$/.test(v) || +v < 1 || +v > maxRestore) { say('Games per group must be a number from 1 to ' + maxRestore); return 0; }
@@ -242,6 +254,8 @@ function restoreSize() {
 }
 $('s-save').onclick = function () {
   if (!restoreSize()) return;
+  var size = $('s-size').value;
+  if (!/^[0-9]+$/.test(size) || +size < 1 || +size > 50) { say('Games per group must be a number from 1 to 50'); return; }
   var body = 'batch=' + ($('s-batch').checked ? 1 : 0) + '&batch_size=' + encodeURIComponent($('s-size').value) +
     '&dlc=' + ($('s-dlc').checked ? 1 : 0) + '&restore_batch=' + $('s-rsize').value + '&paths=' + encodeURIComponent($('s-paths').value);
   api('/api/config', 'POST', body, function (err, j) {

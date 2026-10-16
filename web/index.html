@@ -82,7 +82,7 @@ form.settings input.num{width:6em}
   </label>
   <label class="check"><input type="checkbox" id="s-batch"> Add new games in groups</label>
   <label>Games per group
-    <input type="number" id="s-size" min="1" max="50">
+    <input type="number" class="num" id="s-size" inputmode="numeric" pattern="[0-9]*" min="1" max="50">
     <span class="hint">Smaller groups are gentler on the system when many games are added at once.</span>
   </label>
   <label class="check"><input type="checkbox" id="s-dlc"> Install add-ons (DLC)</label>
@@ -90,7 +90,7 @@ form.settings input.num{width:6em}
     <span class="hint">Moves the pkgs of a game (game, update and all its add-ons) back to where they came from,
       with their original names, and takes the game out of the library. No pkg is deleted. The open game is closed first.</span>
     <label><span>Games removed from the library per group (1 to <span class="rmax">10</span>)</span>
-      <input type="text" class="num" id="s-rsize" inputmode="numeric" pattern="[0-9]*" maxlength="2">
+      <input type="number" class="num" id="s-rsize" inputmode="numeric" pattern="[0-9]*" min="1" max="10">
     </label>
     <div class="row" style="justify-content:flex-start;flex-wrap:wrap">
       <button type="button" class="danger" id="s-restore">Move all games back</button>
@@ -212,11 +212,26 @@ $('settingsbtn').onclick = function () {
 };
 $('s-batch').onchange = function () { $('s-size').disabled = !this.checked; };
 $('s-cancel').onclick = function () { $('setdlg').close(); };
-$('s-rsize').oninput = function () {
-  var v = this.value.replace(/[^0-9]/g, '');
-  if (v !== '' && +v > maxRestore) v = String(maxRestore);
-  if (v !== this.value) this.value = v;
-};
+/* Number fields: type=number opens the numeric keyboard on the PS5 (inputmode alone does
+ * not), inputmode on phones; digits only, capped at max. */
+function onlyDigits(el, max) {
+  /* a key that types anything but a digit never reaches the field (Enter still submits) */
+  el.onkeypress = function (e) {
+    e = e || window.event;
+    var c = e.charCode || e.keyCode || 0;
+    if (c >= 32 && (c < 48 || c > 57)) {
+      if (e.preventDefault) e.preventDefault();
+      return false;
+    }
+  };
+  el.oninput = function () {
+    var v = this.value.replace(/[^0-9]/g, '');
+    if (v !== '' && +v > max()) v = String(max());
+    if (v !== this.value) this.value = v;
+  };
+}
+onlyDigits($('s-size'), function () { return 50; });
+onlyDigits($('s-rsize'), function () { return maxRestore; });
 $('s-restore').onclick = function () {
   var size = restoreSize();
   if (!size) return;
@@ -270,6 +285,8 @@ $('s-forget').onclick = function () {
 $('setform').onsubmit = function (e) {
   e.preventDefault();
   if (!restoreSize()) return;
+  var size = $('s-size').value;
+  if (!/^[0-9]+$/.test(size) || +size < 1 || +size > 50) { toast('Games per group must be a number from 1 to 50'); return; }
   var body = 'batch=' + ($('s-batch').checked ? 1 : 0) + '&batch_size=' + encodeURIComponent($('s-size').value) +
     '&dlc=' + ($('s-dlc').checked ? 1 : 0) + '&restore_batch=' + $('s-rsize').value + '&paths=' + encodeURIComponent($('s-paths').value);
   fetch('/api/config', {method: 'POST', cache: 'no-store', headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: body})

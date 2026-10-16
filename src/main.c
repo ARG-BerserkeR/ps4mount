@@ -45,7 +45,7 @@
 #include "web.h"
 #include "icon_data.h"
 
-#define VERSION "PS4Mount 0.5.1"
+#define VERSION "PS4Mount 0.6.0"
 #define LOCK_PORT 9032
 #define SCAN_SECONDS 10
 #define STATE_DIR "/data/ps4mount"
@@ -744,7 +744,20 @@ static int title_running(const char *tid) {
 
 static void unmount_all_layers(const char *target, int force);
 
+/* Set while /user/app shows only the games being registered (see mask_user_app): the
+ * other game folders are hidden then, and must not be mounted or unmounted. */
+static int g_masked;
+
+static int masked_path(const char *target) {
+    if (!g_masked || strncmp(target, "/user/app/", 10))
+        return 0;
+    printf("[mount] %s: skipped while /user/app shows only the new games\n", target);
+    return 1;
+}
+
 static int mount_dir(const char *dir, const char *target) {
+    if (masked_path(target))
+        return 0;
     /* /user/patch and /user/addcont only exist once the console installed an update or
      * an add-on the normal way: create the parent like the system does (0770) */
     char parent[64];
@@ -774,6 +787,8 @@ static int mount_dir(const char *dir, const char *target) {
 }
 
 static void unmount_all_layers(const char *target, int force) {
+    if (masked_path(target))
+        return;
     for (int i = 0; i < 8 && (mounted_from(target, NULL, 0) || layers_on(target) > 0); i++)
         if (unmount(target, force ? MNT_FORCE : 0)) {
             printf("[mount] unmount %s: %s\n", target, strerror(errno));
@@ -1079,13 +1094,118 @@ static void wait_db_quiet(int quiet, int limit) {
 
 /* ShellCore registers every new title under /user/app itself; this also refreshes the
  * home screen and fetches the PSN concept. Waits while titles keep arriving. */
+/* AppInstallAll walks every folder of /system_ex/app, /system_ex/rnps/apps and /user/app
+ * (about 0.7 s per PS4 game, registered or not). While it runs, /user/app shows only the
+ * games being added: an empty staging folder is mounted over /user/app and each new
+ * game's folder on top of it. The other games stay registered (their rows are not
+ * touched) and their own mounts stay in place underneath. */
+#define STAGE_DIR HOLD_DIR "/stage"
+
+static int open_games(uint32_t *ids, char (*tids)[10], int max);
+
+static void stage_clear(void) {
+    DIR *d = opendir(STAGE_DIR);
+    if (!d)
+        return;
+    struct dirent *e;
+    char p[PATH_MAX];
+    while ((e = readdir(d)))
+        if (e->d_name[0] != '.') {
+            snprintf(p, sizeof(p), STAGE_DIR "/%s", e->d_name);
+            rmdir(p);
+        }
+    closedir(d);
+}
+
+static int user_app_masked(void) {
+    struct statfs sf;
+    return !statfs("/user/app", &sf) && !strcmp(sf.f_mntonname, "/user/app") && !strcmp(sf.f_mntfromname, STAGE_DIR);
+}
+
+static void unmask_user_app(char (*tids)[10], int n) {
+    char target[64];
+    for (int i = 0; i < n; i++) {
+        snprintf(target, sizeof(target), "/user/app/%s", tids[i]);
+        if (user_app_masked() && mounted_from(target, NULL, 0) && unmount(target, 0) && unmount(target, MNT_FORCE))
+            printf("[reg] unmount %s: %s\n", target, strerror(errno));
+    }
+    /* the system keeps the folder open for a moment after AppInstallAll returned */
+    for (int i = 0; i < 12 && user_app_masked(); i++) {
+        if (!unmount("/user/app", 0))
+            break;
+        pump_events(250);
+    }
+    if (user_app_masked() && unmount("/user/app", MNT_FORCE))
+        printf("[reg] unmount /user/app: %s\n", strerror(errno));
+    if (user_app_masked())
+        printf("[reg] /user/app still shows only the new games\n");
+    g_masked = 0;
+    stage_clear();
+}
+
+/* A daemon stopped while /user/app showed only the new games: show all of them again. */
+static void unmask_leftover(void) {
+    static char tids[MAX_TITLES][10];
+    int n = 0;
+    DIR *d = opendir(STAGE_DIR);
+    struct dirent *e;
+    while (d && (e = readdir(d)) && n < MAX_TITLES)
+        if (strlen(e->d_name) == 9)
+            snprintf(tids[n++], 10, "%s", e->d_name);
+    if (d)
+        closedir(d);
+    printf("[reg] /user/app showed only %d game(s) from an earlier run, restoring it\n", n);
+    g_masked = 1;
+    unmask_user_app(tids, n);
+}
+
+/* Returns 1 when /user/app now shows only the games of tids that are not registered. */
+static int mask_user_app(char (*tids)[10], int n) {
+    uint32_t ids[4];
+    char open[4][10];
+    if (g_reg_mode != REG_ALL || open_games(ids, open, 4))
+        return 0; /* an open game keeps its folder in use: plain AppInstallAll */
+    if (user_app_masked())
+        unmask_leftover();
+    stage_clear();
+    mkdirs(STAGE_DIR, 0777);
+    char new_tids[MAX_TITLES][10];
+    int nn = 0;
+    for (int i = 0; i < n && nn < MAX_TITLES; i++)
+        if (!db_is_registered(tids[i])) {
+            char p[PATH_MAX];
+            snprintf(p, sizeof(p), STAGE_DIR "/%s", tids[i]);
+            if (mkdir(p, 0777) && errno != EEXIST)
+                return 0;
+            snprintf(new_tids[nn++], 10, "%s", tids[i]);
+        }
+    if (!nn || nullfs_mount(STAGE_DIR, "/user/app"))
+        return 0;
+    for (int i = 0; i < nn; i++) {
+        char hold[PATH_MAX], target[64];
+        hold_path(hold, sizeof(hold), "app", new_tids[i]);
+        snprintf(target, sizeof(target), "/user/app/%s", new_tids[i]);
+        if (nullfs_mount(hold, target)) {
+            unmask_user_app(new_tids, i);
+            return 0;
+        }
+    }
+    g_masked = 1;
+    printf("[reg] /user/app shows only the %d new game(s) during AppInstallAll\n", nn);
+    return 1;
+}
+
 static void install_all(char (*tids)[10], int n) {
     int need = 0;
     for (int i = 0; i < n; i++)
         need += !db_is_registered(tids[i]);
     if (!need)
         return;
-    install_all_start(tids, n);
+    int masked = mask_user_app(tids, n);
+    if (install_all_start(tids, n) && masked) {
+        unmask_user_app(tids, n);
+        masked = 0;
+    }
     int done = n - need, idle = 0;
     while (done < n && idle < 30) {
         pump_events(1000);
@@ -1094,7 +1214,17 @@ static void install_all(char (*tids)[10], int n) {
             now += db_is_registered(tids[i]);
         idle = now > done ? 0 : idle + 1;
         done = now;
+        if (masked && !g_install_busy) {
+            unmask_user_app(tids, n);
+            masked = 0;
+        }
     }
+    /* the rows can be there before AppInstallAll returns: the other games stay hidden
+     * until it does (at most two minutes) */
+    for (int i = 0; masked && g_install_busy && i < 120; i++)
+        pump_events(1000);
+    if (masked)
+        unmask_user_app(tids, n);
     printf("[reg] %s=%s0x%08x: %d of %d title(s) registered\n", reg_mode_name(), g_install_busy ? "(still running) " : "",
            g_install_rc, done, n);
 }
@@ -2861,7 +2991,7 @@ static void pump_events(int ms) {
             FD_SET(g_klog, &fs);
             maxfd = g_klog;
         }
-        if (g_web >= 0) {
+        if (g_web >= 0 && !g_masked) { /* panel requests wait until all games show again */
             FD_SET(g_web, &fs);
             if (g_web > maxfd)
                 maxfd = g_web;
@@ -2918,6 +3048,8 @@ int main(void) {
     config_load();
     signal(SIGPIPE, SIG_IGN);
     check_firmware();
+    if (user_app_masked())
+        unmask_leftover();
     if (g_reg_mode != REG_NONE)
         install_panel_shortcut(); /* registered by the system like the games */
     g_web = web_listen();
