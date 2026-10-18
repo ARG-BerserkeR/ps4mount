@@ -898,6 +898,16 @@ static int installed_internally(const char *tid) {
     return exists(p);
 }
 
+/* The marker without the drive name: "/mnt/usb0/ps4/<TID>..." -> "/ps4/<TID>...".
+ * Drives are named in the order they are mounted, so the same drive can come back
+ * under another name; the registration does not depend on it. */
+static const char *skip_drive(const char *marker) {
+    if (strncmp(marker, "/mnt/", 5))
+        return marker;
+    const char *s = strchr(marker + 5, '/');
+    return s ? s : marker;
+}
+
 static int marker_matches(const char *tid, const char *expected) {
     char path[64], buf[PATH_MAX + 256] = {0};
     snprintf(path, sizeof(path), STATE_DIR "/%s.src", tid);
@@ -906,7 +916,24 @@ static int marker_matches(const char *tid, const char *expected) {
         return 0;
     ssize_t n = read(fd, buf, sizeof(buf) - 1);
     close(fd);
-    return n > 0 && !strcmp(buf, expected);
+    return n > 0 && !strcmp(skip_drive(buf), skip_drive(expected));
+}
+
+/* A registered game whose drive came back under another name: the marker gets the
+ * new folder, which tells the copy on this drive is the one served. */
+static void marker_follow(const title_src_t *t) {
+    char path[64], buf[PATH_MAX + 256] = {0};
+    snprintf(path, sizeof(path), STATE_DIR "/%s.src", t->app.title_id);
+    int fd = open(path, O_RDONLY);
+    if (fd < 0)
+        return;
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0 || !strcmp(buf, t->marker))
+        return;
+    buf[strcspn(buf, "\n")] = 0;
+    printf("[scan] %s: drive renamed (was %s), kept registered\n", t->dir, buf);
+    write_file(path, t->marker, strlen(t->marker), 0666);
 }
 
 /* 1 = needs (re)registration, 0 = registered here, -1 = skip. */
@@ -1751,6 +1778,7 @@ static void scan_root(const char *root, int fresh, int reconnected) {
         title_src_t src;
         if (t->state != 0 || src_open(&src, root, t->tid))
             continue;
+        marker_follow(&src);
         enforce_patch_sfo(&src);
         manage(&src);
         managed_t *m = managed_by(t->tid, NULL);
