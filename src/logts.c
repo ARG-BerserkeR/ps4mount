@@ -58,17 +58,20 @@ int log_write_lines(int fd, int *at_start, const char *buf, size_t len, const ch
 
 int log_shrink(const char *path, long max, long keep) {
     struct stat st;
-    if (stat(path, &st) || st.st_size <= max)
+    int in = open(path, O_RDONLY);
+    if (in < 0)
         return 0;
+    if (fstat(in, &st) || st.st_size <= max) {
+        close(in);
+        return 0;
+    }
     if (keep > st.st_size)
         keep = st.st_size;
     char *buf = malloc((size_t)keep);
-    int in = open(path, O_RDONLY);
     ssize_t got = -1;
-    if (buf && in >= 0 && lseek(in, st.st_size - keep, SEEK_SET) >= 0)
+    if (buf && lseek(in, st.st_size - keep, SEEK_SET) >= 0)
         got = read(in, buf, (size_t)keep);
-    if (in >= 0)
-        close(in);
+    close(in);
     if (got < 0) {
         free(buf);
         return -1;

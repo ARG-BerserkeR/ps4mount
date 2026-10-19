@@ -908,7 +908,8 @@ static const char *skip_drive(const char *marker) {
     return s ? s : marker;
 }
 
-static int marker_matches(const char *tid, const char *expected) {
+/* The stored marker, without the drive name, is expected; it is copied to stored. */
+static int marker_matches(const char *tid, const char *expected, char *stored, size_t len) {
     char path[64], buf[PATH_MAX + 256] = {0};
     snprintf(path, sizeof(path), STATE_DIR "/%s.src", tid);
     int fd = open(path, O_RDONLY);
@@ -916,28 +917,25 @@ static int marker_matches(const char *tid, const char *expected) {
         return 0;
     ssize_t n = read(fd, buf, sizeof(buf) - 1);
     close(fd);
+    snprintf(stored, len, "%s", buf);
     return n > 0 && !strcmp(skip_drive(buf), skip_drive(expected));
 }
 
 /* A registered game whose drive came back under another name: the links and records
  * that hold the pkg path are written again for the new folder, without registering the
  * game again. */
-static int relocate(title_src_t *t) {
-    char path[64], buf[PATH_MAX + 256] = {0};
-    snprintf(path, sizeof(path), STATE_DIR "/%s.src", t->app.title_id);
-    int fd = open(path, O_RDONLY);
-    if (fd < 0)
+static int relocate(title_src_t *t, char *stored) {
+    if (!strcmp(stored, t->marker))
         return 0;
-    ssize_t n = read(fd, buf, sizeof(buf) - 1);
-    close(fd);
-    if (n <= 0 || !strcmp(buf, t->marker) || strcmp(skip_drive(buf), skip_drive(t->marker)))
-        return 0;
-    buf[strcspn(buf, "\n")] = 0;
+    char was[PATH_MAX];
+    snprintf(was, sizeof(was), "%.*s", (int)strcspn(stored, "\n"), stored);
     if (place_files(t)) {
-        printf("[scan] %s: drive renamed (was %s), could not move its files\n", t->dir, buf);
+        printf("[scan] %s: drive renamed (was %s), could not move its files\n", t->dir, was);
         return -1;
     }
-    printf("[scan] %s: drive renamed (was %s), kept registered\n", t->dir, buf);
+    printf("[scan] %s: drive renamed (was %s), kept registered\n", t->dir, was);
+    char path[64];
+    snprintf(path, sizeof(path), STATE_DIR "/%s.src", t->app.title_id);
     return write_file(path, t->marker, strlen(t->marker), 0666);
 }
 
@@ -973,11 +971,12 @@ static int title_state(title_src_t *t) {
     }
     char pdb[PATH_MAX];
     snprintf(pdb, sizeof(pdb), "/user/playgo/app/%s/00/d0.pdb", t->app.content_id);
-    if (db_is_registered(tid) && exists(pdb) && relocate(t))
+    char stored[PATH_MAX + 256];
+    if (!db_is_registered(tid) || !exists(pdb) || !marker_matches(tid, t->marker, stored, sizeof(stored)) ||
+        relocate(t, stored))
         return 1;
     /* folders set up by 0.3.1 and older lack the internal folder: registered again */
-    return !db_is_registered(tid) || !exists(pdb) || !marker_matches(tid, t->marker) ||
-           !hold_ready("app", tid, "app.pkg") || (t->has_patch && !hold_ready("patch", tid, "patch.pkg")) ||
+    return !hold_ready("app", tid, "app.pkg") || (t->has_patch && !hold_ready("patch", tid, "patch.pkg")) ||
            !dlc_ready(t);
 }
 
