@@ -898,6 +898,16 @@ static int installed_internally(const char *tid) {
     return exists(p);
 }
 
+/* The marker without the drive name: "/mnt/usb0/ps4/<TID>..." -> "/ps4/<TID>...".
+ * Drives are named in the order they are mounted, so the same drive can come back
+ * under another name; the registration does not depend on it. */
+static const char *skip_drive(const char *marker) {
+    if (strncmp(marker, "/mnt/", 5))
+        return marker;
+    const char *s = strchr(marker + 5, '/');
+    return s ? s : marker;
+}
+
 static int marker_matches(const char *tid, const char *expected) {
     char path[64], buf[PATH_MAX + 256] = {0};
     snprintf(path, sizeof(path), STATE_DIR "/%s.src", tid);
@@ -906,7 +916,29 @@ static int marker_matches(const char *tid, const char *expected) {
         return 0;
     ssize_t n = read(fd, buf, sizeof(buf) - 1);
     close(fd);
-    return n > 0 && !strcmp(buf, expected);
+    return n > 0 && !strcmp(skip_drive(buf), skip_drive(expected));
+}
+
+/* A registered game whose drive came back under another name: the links and records
+ * that hold the pkg path are written again for the new folder, without registering the
+ * game again. */
+static int relocate(title_src_t *t) {
+    char path[64], buf[PATH_MAX + 256] = {0};
+    snprintf(path, sizeof(path), STATE_DIR "/%s.src", t->app.title_id);
+    int fd = open(path, O_RDONLY);
+    if (fd < 0)
+        return 0;
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0 || !strcmp(buf, t->marker) || strcmp(skip_drive(buf), skip_drive(t->marker)))
+        return 0;
+    buf[strcspn(buf, "\n")] = 0;
+    if (place_files(t)) {
+        printf("[scan] %s: drive renamed (was %s), could not move its files\n", t->dir, buf);
+        return -1;
+    }
+    printf("[scan] %s: drive renamed (was %s), kept registered\n", t->dir, buf);
+    return write_file(path, t->marker, strlen(t->marker), 0666);
 }
 
 /* 1 = needs (re)registration, 0 = registered here, -1 = skip. */
@@ -941,6 +973,8 @@ static int title_state(title_src_t *t) {
     }
     char pdb[PATH_MAX];
     snprintf(pdb, sizeof(pdb), "/user/playgo/app/%s/00/d0.pdb", t->app.content_id);
+    if (db_is_registered(tid) && exists(pdb) && relocate(t))
+        return 1;
     /* folders set up by 0.3.1 and older lack the internal folder: registered again */
     return !db_is_registered(tid) || !exists(pdb) || !marker_matches(tid, t->marker) ||
            !hold_ready("app", tid, "app.pkg") || (t->has_patch && !hold_ready("patch", tid, "patch.pkg")) ||
