@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "logts.h"
@@ -90,6 +91,54 @@ int main(void) {
     CHECK(stamped == n);
     CHECK(first && joined);
     CHECK(last); /* nothing lost at the end */
+
+    fprintf(stderr, "cut back\n");
+    char small[] = "/tmp/ps4mount_log_XXXXXX";
+    fd = mkstemp(small);
+    CHECK(fd >= 0 && write(fd, "aaaa\nbbbb\ncccc\n", 15) == 15);
+    close(fd);
+    CHECK(log_shrink(small, 100, 8) == 0); /* under the limit: untouched */
+    CHECK(log_shrink(small, 10, 8) == 1);
+    f = fopen(small, "r");
+    CHECK(f && fgets(line, sizeof(line), f) && !strcmp(line, "cccc\n") && !fgets(line, sizeof(line), f));
+    if (f)
+        fclose(f);
+    unlink(small);
+    CHECK(log_shrink("/tmp/ps4mount-no-such-log", 10, 8) == 0);
+
+    fprintf(stderr, "size limit\n");
+    char big[] = "/tmp/ps4mount_log_XXXXXX";
+    fd = mkstemp(big);
+    CHECK(fd >= 0);
+    static char filler[100];
+    memset(filler, 'x', sizeof(filler) - 1);
+    filler[sizeof(filler) - 1] = '\n';
+    for (int i = 0; i < 120000; i++) /* 12 MB left by an earlier run */
+        if (write(fd, filler, sizeof(filler)) < 0)
+            break;
+    close(fd);
+    saved = dup(STDOUT_FILENO);
+    CHECK(!log_start(big));
+    setvbuf(stdout, NULL, _IOLBF, 0);
+    struct stat st;
+    CHECK(!stat(big, &st) && st.st_size <= (256 << 10)); /* cut when the log starts */
+    for (int i = 0; i < 150000; i++) /* about 15 MB more while running */
+        printf("[klog] a line long enough to fill the log quickly, number %d of the test\n", i);
+    log_stop();
+    dup2(saved, STDOUT_FILENO);
+    close(saved);
+    CHECK(!stat(big, &st) && st.st_size <= (10 << 20) + 8192); /* kept under the limit */
+    f = fopen(big, "r");
+    int whole = 1, lines = 0, end = 0;
+    while (f && fgets(line, sizeof(line), f)) {
+        lines++;
+        whole &= matches("^[0-9]{4}-[0-9]{2}-[0-9]{2} ", line);
+        end |= strstr(line, "number 149999 of the test") != NULL;
+    }
+    if (f)
+        fclose(f);
+    unlink(big);
+    CHECK(lines > 1000 && whole && end); /* still written after the cut, nothing lost at the end */
 
     fprintf(stderr, "%d checks, %d failed\n", g_checks, g_failed);
     return g_failed != 0;
