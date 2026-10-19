@@ -316,6 +316,11 @@ static int src_open(title_src_t *t, const char *root, const char *tid) {
         printf("[scan] %s: unreadable app pkg\n", t->app_path);
         return -1;
     }
+    if (strcmp(t->app.title_id, tid)) {
+        printf("[scan] %s: the game pkg is for %s\n", t->app_path, t->app.title_id);
+        pkg_close(&t->app);
+        return -1;
+    }
     if (exists(t->patch_path)) {
         const sfo_item_t *gv = sfo_get(&t->app_sfo, "VERSION");
         if (pkg_open(&t->patch, t->patch_path) || read_sfo(&t->patch, &t->patch_sfo)) {
@@ -934,8 +939,8 @@ static int relocate(title_src_t *t, char *stored) {
         return -1;
     }
     printf("[scan] %s: drive renamed (was %s), kept registered\n", t->dir, was);
-    char path[64];
-    snprintf(path, sizeof(path), STATE_DIR "/%s.src", t->app.title_id);
+    char path[64]; /* named after the folder, which src_open matched to the pkg */
+    snprintf(path, sizeof(path), STATE_DIR "/%s.src", strrchr(t->dir, '/') + 1);
     return write_file(path, t->marker, strlen(t->marker), 0666);
 }
 
