@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 gasb07
- * Log file with the time at the start of every line. */
+ * Log file with the time at the start of every line, kept under 10 MB: past that it is cut
+ * back to its last 256 KB, at start and while running. */
 #pragma once
 
 #include <stddef.h>
@@ -16,3 +17,6 @@ void log_stamp(char *out, size_t n);
 /* Writes buf to fd, putting stamp before every line; *at_start tracks whether the next
  * byte begins a line (start with 1). Returns 0, or -1 when a write failed. */
 int log_write_lines(int fd, int *at_start, const char *buf, size_t len, const char *stamp);
+/* When path is larger than max bytes, keeps only its last keep bytes (from the first whole
+ * line). Returns 1 when cut, 0 when left alone, -1 on error. */
+int log_shrink(const char *path, long max, long keep);
